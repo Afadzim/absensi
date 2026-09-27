@@ -145,6 +145,10 @@ export async function createAttendanceSessionFixture(): Promise<AttendanceSessio
     startPeriodNumber: 1,
     endPeriodNumber: 2,
     cleanup: async () => {
+      await testPrisma.attendanceSessionSegment.deleteMany({
+        where: { institutionId: institution.id },
+      });
+
       await testPrisma.attendanceSession.deleteMany({
         where: { institutionId: institution.id },
       });

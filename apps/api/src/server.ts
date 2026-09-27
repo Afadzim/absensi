@@ -1,20 +1,7 @@
-import Fastify from "fastify";
-import cors from "@fastify/cors";
+import "dotenv/config";
+import { buildApp } from "./app.js";
 
-const app = Fastify({
-  logger: true,
-});
-
-await app.register(cors, {
-  origin: true,
-});
-
-app.get("/health", async () => {
-  return {
-    status: "ok",
-    service: "absensi-madrasah-api",
-  };
-});
+const app = buildApp();
 
 const port = Number(process.env.PORT ?? 3001);
 const host = process.env.HOST ?? "0.0.0.0";
