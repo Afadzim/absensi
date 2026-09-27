@@ -188,6 +188,7 @@ model User {
   institution                       Institution                   @relation(fields: [institutionId], references: [id], onDelete: Restrict)
   roles                             UserRole[]
   auditLogs                         AuditLog[]
+  authSessions                      AuthSession[]
   adjustments                       AttendanceAdjustment[]        @relation("AdjustmentActor")
   approvals                         TeacherSubstitution[]         @relation("SubstitutionApprover")
   teacher                           Teacher?
@@ -239,6 +240,28 @@ model RolePermission {
 
   @@id([roleId, permissionId])
   @@index([permissionId])
+}
+
+model AuthSession {
+  id               String    @id @default(uuid()) @db.Uuid
+  userId           String    @db.Uuid
+  institutionId    String    @db.Uuid
+  sessionTokenHash String    @db.VarChar(128)
+  csrfTokenHash    String    @db.VarChar(128)
+  createdAt        DateTime  @default(now()) @db.Timestamptz(3)
+  lastSeenAt       DateTime  @default(now()) @db.Timestamptz(3)
+  expiresAt        DateTime  @db.Timestamptz(3)
+  revokedAt        DateTime? @db.Timestamptz(3)
+  createdIp        String?   @db.VarChar(45)
+  lastSeenIp       String?   @db.VarChar(45)
+  userAgent        String?   @db.Text
+
+  user User @relation(fields: [institutionId, userId], references: [institutionId, id], onDelete: Restrict)
+
+  @@unique([id, institutionId])
+  @@unique([sessionTokenHash])
+  @@index([institutionId, userId, revokedAt])
+  @@index([institutionId, expiresAt])
 }
 
 // ============================================================
@@ -808,6 +831,10 @@ model AuditLog {
   entityId           String   @db.Uuid
   beforeData         Json?
   afterData          Json?
+  requestId          String?  @db.VarChar(100)
+  ipAddress          String?  @db.VarChar(45)
+  userAgent          String?  @db.Text
+  reason             String?  @db.Text
   createdAt          DateTime @default(now()) @db.Timestamptz(3)
 
   institution Institution @relation(fields: [institutionId], references: [id], onDelete: Restrict)
