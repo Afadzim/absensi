@@ -1,0 +1,21 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: absensi-madrasah-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: absensi_madrasah
+      POSTGRES_USER: absensi
+      POSTGRES_PASSWORD: absensi_dev_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U absensi -d absensi_madrasah"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  postgres_data:

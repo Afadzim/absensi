@@ -1,0 +1,874 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ============================================================
+// ENUMS
+// ============================================================
+
+enum UserStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum AttendanceSessionStatus {
+  OPEN
+  FINALIZED
+  CANCELLED
+}
+
+enum AttendanceSegmentStatus {
+  OPEN
+  CLOSED
+}
+
+enum TeacherAttendanceStatus {
+  HADIR
+  PARTIAL
+  DINAS
+  IZIN
+  SAKIT
+  ALPA
+}
+
+enum StudentAttendanceStatus {
+  HADIR
+  PENUGASAN
+  IZIN
+  SAKIT
+  ALPA
+}
+
+enum TeacherAdministrativeStatusType {
+  DINAS
+  IZIN
+  SAKIT
+}
+
+enum StudentAdministrativeStatusType {
+  IZIN
+  SAKIT
+  PENUGASAN
+}
+
+enum SubstitutionStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
+enum AttendanceAdjustmentTarget {
+  TEACHER
+  STUDENT
+}
+
+enum ProcessedEventStatus {
+  PROCESSED
+  FAILED
+}
+
+enum NotificationStatus {
+  PENDING
+  SENT
+  FAILED
+}
+
+enum SubjectOfferingType {
+  REGULAR
+  ELECTIVE
+}
+
+enum ScheduleStudentParticipantAction {
+  INCLUDE
+  EXCLUDE
+}
+
+enum StudentSubjectChoiceStatus {
+  ACTIVE
+  ENDED
+}
+
+// ============================================================
+// TENANT & ACADEMIC STRUCTURE
+// ============================================================
+
+model Institution {
+  id        String   @id @default(uuid()) @db.Uuid
+  code      String   @db.VarChar(50)
+  name      String   @db.VarChar(200)
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  academicYears                 AcademicYear[]
+  users                         User[]
+  teachers                      Teacher[]
+  students                      Student[]
+  classes                       Class[]
+  subjects                      Subject[]
+  rooms                         Room[]
+  schedulePeriods               SchedulePeriod[]
+  schedules                     Schedule[]
+  teacherAdministrativeStatuses TeacherAdministrativeStatus[]
+  studentAdministrativeStatuses StudentAdministrativeStatus[]
+  teacherSubstitutions          TeacherSubstitution[]
+  attendanceSessions            AttendanceSession[]
+  attendanceSessionSegments     AttendanceSessionSegment[]
+  teacherAttendances            TeacherAttendance[]
+  studentAttendances            StudentAttendance[]
+  gateEvents                    GateEvent[]
+  attendanceAdjustments         AttendanceAdjustment[]
+  auditLogs                     AuditLog[]
+  notificationLogs              NotificationLog[]
+  processedEvents               ProcessedEvent[]
+  semesters                     Semester[]
+  subjectOfferings              SubjectOffering[]
+  studentSubjectChoices         StudentSubjectChoice[]
+  scheduleClassParticipants     ScheduleClassParticipant[]
+  scheduleStudentParticipants   ScheduleStudentParticipant[]
+
+  @@unique([code])
+}
+
+model AcademicYear {
+  id            String   @id @default(uuid()) @db.Uuid
+  institutionId String   @db.Uuid
+  code          String   @db.VarChar(20)
+  name          String   @db.VarChar(100)
+  createdAt     DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt     DateTime @updatedAt @db.Timestamptz(3)
+
+  institution      Institution              @relation(fields: [institutionId], references: [id], onDelete: Restrict)
+  semesters        Semester[]
+  enrollments      StudentClassEnrollment[]
+  schedules        Schedule[]
+  subjectOfferings SubjectOffering[]
+
+  @@unique([institutionId, code])
+  @@unique([id, institutionId])
+  @@index([institutionId])
+}
+
+model Semester {
+  id             String   @id @default(uuid()) @db.Uuid
+  institutionId  String   @db.Uuid
+  academicYearId String   @db.Uuid
+  code           String   @db.VarChar(20)
+  name           String   @db.VarChar(100)
+  createdAt      DateTime @default(now()) @db.Timestamptz(3)
+
+  institution  Institution  @relation(fields: [institutionId], references: [id], onDelete: Restrict)
+  academicYear AcademicYear @relation(fields: [institutionId, academicYearId], references: [institutionId, id], onDelete: Restrict)
+  schedules    Schedule[]
+
+  @@unique([academicYearId, code])
+  @@unique([id, institutionId])
+  @@unique([id, institutionId, academicYearId])
+  @@index([institutionId, academicYearId])
+}
+
+// ============================================================
+// IDENTITY & AUTHORIZATION
+// ============================================================
+
+model User {
+  id            String     @id @default(uuid()) @db.Uuid
+  institutionId String     @db.Uuid
+  username      String     @db.VarChar(100)
+  passwordHash  String     @db.VarChar(255)
+  status        UserStatus @default(ACTIVE)
+  createdAt     DateTime   @default(now()) @db.Timestamptz(3)
+  updatedAt     DateTime   @updatedAt @db.Timestamptz(3)
+
+  institution                       Institution                   @relation(fields: [institutionId], references: [id], onDelete: Restrict)
+  roles                             UserRole[]
+  auditLogs                         AuditLog[]
+  adjustments                       AttendanceAdjustment[]        @relation("AdjustmentActor")
+  approvals                         TeacherSubstitution[]         @relation("SubstitutionApprover")
+  teacher                           Teacher?
+  teacherAdministrativeStatuses     TeacherAdministrativeStatus[] @relation("TeacherAdminStatusActor")
+  studentAdministrativeStatuses     StudentAdministrativeStatus[] @relation("StudentAdminStatusActor")
+  scheduleStudentParticipantChanges ScheduleStudentParticipant[]  @relation("ScheduleStudentParticipantActor")
+
+  @@unique([institutionId, username])
+  @@unique([id, institutionId])
+  @@index([institutionId])
+}
+
+model Role {
+  id          String  @id @default(uuid()) @db.Uuid
+  name        String  @db.VarChar(100)
+  description String? @db.VarChar(255)
+
+  users       UserRole[]
+  permissions RolePermission[]
+
+  @@unique([name])
+}
+
+model Permission {
+  id          String  @id @default(uuid()) @db.Uuid
+  code        String  @unique @db.VarChar(100)
+  description String? @db.VarChar(255)
+
+  roles RolePermission[]
+}
+
+model UserRole {
+  userId String @db.Uuid
+  roleId String @db.Uuid
+
+  user User @relation(fields: [userId], references: [id], onDelete: Restrict)
+  role Role @relation(fields: [roleId], references: [id], onDelete: Restrict)
+
+  @@id([userId, roleId])
+  @@index([roleId])
+}
+
+model RolePermission {
+  roleId       String @db.Uuid
+  permissionId String @db.Uuid
+
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: Restrict)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Restrict)
+
+  @@id([roleId, permissionId])
+  @@index([permissionId])
+}
+
+// ============================================================
+// MASTER PERSON
+// ============================================================
+
+model Teacher {
+  id                String   @id @default(uuid()) @db.Uuid
+  institutionId     String   @db.Uuid
+  code              String   @db.VarChar(50)
+  name              String   @db.VarChar(200)
+  phone             String?  @db.VarChar(30)
+  userId            String?  @db.Uuid
+  userInstitutionId String?  @db.Uuid
+  createdAt         DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt         DateTime @updatedAt @db.Timestamptz(3)
+
+  institution Institution @relation(fields: [institutionId], references: [id], onDelete: Restrict)
+  user        User?       @relation(fields: [userInstitutionId, userId], references: [institutionId, id], onDelete: Restrict)
+
+  schedulesAsPrimary      Schedule[]                    @relation("PrimaryTeacher")
+  adminStatuses           TeacherAdministrativeStatus[]
+  substitutionsOriginal   TeacherSubstitution[]         @relation("OriginalTeacher")
+  substitutionsSubstitute TeacherSubstitution[]         @relation("SubstituteTeacher")
+  segments                AttendanceSessionSegment[]
+  attendances             TeacherAttendance[]
+
+  @@unique([institutionId, code])
+  @@unique([id, institutionId])
+  @@unique([userInstitutionId, userId])
+  @@index([institutionId, userId])
+  @@index([institutionId])
+}
+
+model Student {
+  id            String   @id @default(uuid()) @db.Uuid
+  institutionId String   @db.Uuid
+  code          String   @db.VarChar(50)
+  name          String   @db.VarChar(200)
+  nisn          String?  @db.VarChar(30)
+  createdAt     DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt     DateTime @updatedAt @db.Timestamptz(3)
+
+  institution          Institution                   @relation(fields: [institutionId], references: [id], onDelete: Restrict)
+  enrollments          StudentClassEnrollment[]
+  adminStatuses        StudentAdministrativeStatus[]
+  gateEvents           GateEvent[]
+  attendances          StudentAttendance[]
+  subjectChoices       StudentSubjectChoice[]
+  scheduleParticipants ScheduleStudentParticipant[]
+
+  @@unique([institutionId, code])
+  @@unique([id, institutionId])
+  @@index([institutionId])
+}
+
+model Class {
+  id            String   @id @default(uuid()) @db.Uuid
+  institutionId String   @db.Uuid
+  code          String   @db.VarChar(50)
+  name          String   @db.VarChar(100)
+  level         String?  @db.VarChar(30)
+  createdAt     DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt     DateTime @updatedAt @db.Timestamptz(3)
+
+  institution          Institution                @relation(fields: [institutionId], references: [id], onDelete: Restrict)
+  enrollments          StudentClassEnrollment[]
+  schedules            Schedule[]
+  scheduleParticipants ScheduleClassParticipant[]
+
+  @@unique([institutionId, code])
+  @@unique([id, institutionId])
+  @@index([institutionId])
+}
+
+model StudentClassEnrollment {
+  id             String    @id @default(uuid()) @db.Uuid
+  institutionId  String    @db.Uuid
+  studentId      String    @db.Uuid
+  classId        String    @db.Uuid
+  academicYearId String    @db.Uuid
+  validFrom      DateTime  @db.Date
+  validTo        DateTime? @db.Date
+  createdAt      DateTime  @default(now()) @db.Timestamptz(3)
+
+  student      Student      @relation(fields: [institutionId, studentId], references: [institutionId, id], onDelete: Restrict)
+  class        Class        @relation(fields: [institutionId, classId], references: [institutionId, id], onDelete: Restrict)
+  academicYear AcademicYear @relation(fields: [institutionId, academicYearId], references: [institutionId, id], onDelete: Restrict)
+
+  @@unique([id, institutionId])
+  @@index([institutionId, studentId, validFrom, validTo])
+  @@index([institutionId, classId, validFrom, validTo])
+  @@index([institutionId, academicYearId])
+}
+
+model Subject {
+  id            String   @id @default(uuid()) @db.Uuid
+  institutionId String   @db.Uuid
+  code          String   @db.VarChar(50)
+  name          String   @db.VarChar(150)
+  createdAt     DateTime @default(now()) @db.Timestamptz(3)
+
+  institution Institution       @relation(fields: [institutionId], references: [id], onDelete: Restrict)
+  schedules   Schedule[]
+  offerings   SubjectOffering[]
+
+  @@unique([institutionId, code])
+  @@unique([id, institutionId])
+  @@index([institutionId])
+}
+
+model Room {
+  id            String   @id @default(uuid()) @db.Uuid
+  institutionId String   @db.Uuid
+  code          String   @db.VarChar(50)
+  name          String   @db.VarChar(100)
+  createdAt     DateTime @default(now()) @db.Timestamptz(3)
+
+  institution Institution @relation(fields: [institutionId], references: [id], onDelete: Restrict)
+  schedules   Schedule[]
+
+  @@unique([institutionId, code])
+  @@unique([id, institutionId])
+  @@index([institutionId])
+}
+
+// ============================================================
+// SUBJECT OFFERING & STUDENT SUBJECT CHOICE
+// ============================================================
+
+model SubjectOffering {
+  id             String              @id @default(uuid()) @db.Uuid
+  institutionId  String              @db.Uuid
+  academicYearId String              @db.Uuid
+  subjectId      String              @db.Uuid
+  offeringType   SubjectOfferingType
+
+  selectionStartLevel  String? @db.VarChar(30)
+  continuationEndLevel String? @db.VarChar(30)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  institution  Institution  @relation(fields: [institutionId], references: [id], onDelete: Restrict)
+  academicYear AcademicYear @relation(fields: [institutionId, academicYearId], references: [institutionId, id], onDelete: Restrict)
+  subject      Subject      @relation(fields: [institutionId, subjectId], references: [institutionId, id], onDelete: Restrict)
+
+  studentChoices StudentSubjectChoice[]
+  schedules      Schedule[]
+
+  @@unique([id, institutionId])
+  @@unique([institutionId, academicYearId, subjectId, offeringType])
+  @@unique([institutionId, academicYearId, subjectId, id])
+  @@index([institutionId, academicYearId])
+  @@index([institutionId, subjectId])
+}
+
+model StudentSubjectChoice {
+  id                String @id @default(uuid()) @db.Uuid
+  institutionId     String @db.Uuid
+  studentId         String @db.Uuid
+  subjectOfferingId String @db.Uuid
+
+  startLevel String                     @db.VarChar(30)
+  status     StudentSubjectChoiceStatus @default(ACTIVE)
+
+  effectiveFrom DateTime  @db.Date
+  effectiveTo   DateTime? @db.Date
+
+  reason String? @db.VarChar(500)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  institution     Institution     @relation(fields: [institutionId], references: [id], onDelete: Restrict)
+  student         Student         @relation(fields: [institutionId, studentId], references: [institutionId, id], onDelete: Restrict)
+  subjectOffering SubjectOffering @relation(fields: [institutionId, subjectOfferingId], references: [institutionId, id], onDelete: Restrict)
+
+  @@unique([id, institutionId])
+  @@index([institutionId, studentId, status])
+  @@index([institutionId, subjectOfferingId])
+  @@index([institutionId, studentId, effectiveFrom])
+}
+
+// ============================================================
+// SCHEDULE PARTICIPANTS
+// ============================================================
+
+model ScheduleClassParticipant {
+  id            String @id @default(uuid()) @db.Uuid
+  institutionId String @db.Uuid
+  scheduleId    String @db.Uuid
+  classId       String @db.Uuid
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  institution Institution @relation(fields: [institutionId], references: [id], onDelete: Restrict)
+  schedule    Schedule    @relation(fields: [institutionId, scheduleId], references: [institutionId, id], onDelete: Restrict)
+  class       Class       @relation(fields: [institutionId, classId], references: [institutionId, id], onDelete: Restrict)
+
+  @@unique([scheduleId, classId])
+  @@unique([id, institutionId])
+  @@index([institutionId, scheduleId])
+  @@index([institutionId, classId])
+}
+
+model ScheduleStudentParticipant {
+  id            String                           @id @default(uuid()) @db.Uuid
+  institutionId String                           @db.Uuid
+  scheduleId    String                           @db.Uuid
+  studentId     String                           @db.Uuid
+  action        ScheduleStudentParticipantAction
+
+  effectiveFrom DateTime  @db.Date
+  effectiveTo   DateTime? @db.Date
+
+  reason String? @db.VarChar(500)
+
+  createdByUserId String @db.Uuid
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  institution Institution @relation(fields: [institutionId], references: [id], onDelete: Restrict)
+  schedule    Schedule    @relation(fields: [institutionId, scheduleId], references: [institutionId, id], onDelete: Restrict)
+  student     Student     @relation(fields: [institutionId, studentId], references: [institutionId, id], onDelete: Restrict)
+  createdBy   User        @relation("ScheduleStudentParticipantActor", fields: [institutionId, createdByUserId], references: [institutionId, id], onDelete: Restrict)
+
+  @@unique([id, institutionId])
+  @@unique([scheduleId, studentId, effectiveFrom])
+  @@index([institutionId, scheduleId])
+  @@index([institutionId, studentId])
+  @@index([institutionId, scheduleId, studentId])
+}
+
+// ============================================================
+
+// ============================================================
+// SCHEDULE
+// ============================================================
+// NOTE: subjectOfferingInstitutionId + subjectOfferingId form the nullable
+// Prisma relation pair. PostgreSQL migration v1.4 additionally enforces
+// academicYearId + subjectId consistency against SubjectOffering.
+
+model SchedulePeriod {
+  id            String   @id @default(uuid()) @db.Uuid
+  institutionId String   @db.Uuid
+  periodNumber  Int
+  startTime     DateTime @db.Time(0)
+  endTime       DateTime @db.Time(0)
+  createdAt     DateTime @default(now()) @db.Timestamptz(3)
+
+  institution Institution @relation(fields: [institutionId], references: [id], onDelete: Restrict)
+
+  schedulesAsStart Schedule[] @relation("ScheduleStartPeriod")
+  schedulesAsEnd   Schedule[] @relation("ScheduleEndPeriod")
+
+  @@unique([institutionId, periodNumber])
+  @@unique([id, institutionId])
+  @@index([institutionId])
+}
+
+model Schedule {
+  id                           String   @id @default(uuid()) @db.Uuid
+  institutionId                String   @db.Uuid
+  academicYearId               String   @db.Uuid
+  semesterId                   String   @db.Uuid
+  dayOfWeek                    Int
+  primaryTeacherId             String   @db.Uuid
+  classId                      String   @db.Uuid
+  subjectId                    String   @db.Uuid
+  subjectOfferingId            String?  @db.Uuid
+  subjectOfferingInstitutionId String?  @db.Uuid
+  roomId                       String?  @db.Uuid
+  roomInstitutionId            String?  @db.Uuid
+  startPeriodNumber            Int
+  endPeriodNumber              Int
+  createdAt                    DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt                    DateTime @updatedAt @db.Timestamptz(3)
+
+  institution     Institution      @relation(fields: [institutionId], references: [id], onDelete: Restrict)
+  academicYear    AcademicYear     @relation(fields: [institutionId, academicYearId], references: [institutionId, id], onDelete: Restrict)
+  semester        Semester         @relation(fields: [institutionId, semesterId, academicYearId], references: [institutionId, id, academicYearId], onDelete: Restrict)
+  primaryTeacher  Teacher          @relation("PrimaryTeacher", fields: [institutionId, primaryTeacherId], references: [institutionId, id], onDelete: Restrict)
+  class           Class            @relation(fields: [institutionId, classId], references: [institutionId, id], onDelete: Restrict)
+  subject         Subject          @relation(fields: [institutionId, subjectId], references: [institutionId, id], onDelete: Restrict)
+  subjectOffering SubjectOffering? @relation(fields: [subjectOfferingInstitutionId, subjectOfferingId], references: [institutionId, id], onDelete: Restrict)
+  room            Room?            @relation(fields: [roomInstitutionId, roomId], references: [institutionId, id], onDelete: Restrict)
+  startPeriod     SchedulePeriod   @relation("ScheduleStartPeriod", fields: [institutionId, startPeriodNumber], references: [institutionId, periodNumber], onDelete: Restrict)
+  endPeriod       SchedulePeriod   @relation("ScheduleEndPeriod", fields: [institutionId, endPeriodNumber], references: [institutionId, periodNumber], onDelete: Restrict)
+
+  substitutions       TeacherSubstitution[]
+  sessions            AttendanceSession[]
+  teacherAttendances  TeacherAttendance[]
+  classParticipants   ScheduleClassParticipant[]
+  studentParticipants ScheduleStudentParticipant[]
+
+  @@unique([id, institutionId])
+  @@index([institutionId, dayOfWeek])
+  @@index([institutionId, primaryTeacherId, dayOfWeek])
+  @@index([institutionId, classId, dayOfWeek])
+  @@index([institutionId, subjectId, dayOfWeek])
+  @@index([institutionId, subjectOfferingId])
+  @@index([institutionId, startPeriodNumber, endPeriodNumber])
+}
+
+// ============================================================
+// ADMINISTRATIVE STATUS
+// ============================================================
+
+model TeacherAdministrativeStatus {
+  id            String                          @id @default(uuid()) @db.Uuid
+  institutionId String                          @db.Uuid
+  teacherId     String                          @db.Uuid
+  type          TeacherAdministrativeStatusType
+  validFrom     DateTime                        @db.Date
+  validTo       DateTime?                       @db.Date
+  reason        String?                         @db.Text
+  createdById   String                          @db.Uuid
+  createdAt     DateTime                        @default(now()) @db.Timestamptz(3)
+
+  institution Institution @relation(fields: [institutionId], references: [id], onDelete: Restrict)
+  teacher     Teacher     @relation(fields: [institutionId, teacherId], references: [institutionId, id], onDelete: Restrict)
+  createdBy   User        @relation("TeacherAdminStatusActor", fields: [institutionId, createdById], references: [institutionId, id], onDelete: Restrict)
+
+  @@unique([id, institutionId])
+  @@index([institutionId, teacherId, validFrom, validTo])
+}
+
+model StudentAdministrativeStatus {
+  id            String                          @id @default(uuid()) @db.Uuid
+  institutionId String                          @db.Uuid
+  studentId     String                          @db.Uuid
+  type          StudentAdministrativeStatusType
+  validFrom     DateTime                        @db.Date
+  validTo       DateTime?                       @db.Date
+  reason        String?                         @db.Text
+  createdById   String                          @db.Uuid
+  createdAt     DateTime                        @default(now()) @db.Timestamptz(3)
+
+  institution Institution @relation(fields: [institutionId], references: [id], onDelete: Restrict)
+  student     Student     @relation(fields: [institutionId, studentId], references: [institutionId, id], onDelete: Restrict)
+  createdBy   User        @relation("StudentAdminStatusActor", fields: [institutionId, createdById], references: [institutionId, id], onDelete: Restrict)
+
+  @@unique([id, institutionId])
+  @@index([institutionId, studentId, validFrom, validTo])
+}
+
+// ============================================================
+// SUBSTITUTION
+// ============================================================
+
+model TeacherSubstitution {
+  id                      String             @id @default(uuid()) @db.Uuid
+  institutionId           String             @db.Uuid
+  scheduleId              String             @db.Uuid
+  substitutionDate        DateTime           @db.Date
+  originalTeacherId       String             @db.Uuid
+  substituteTeacherId     String             @db.Uuid
+  startTime               DateTime           @db.Time(0)
+  endTime                 DateTime           @db.Time(0)
+  reason                  String             @db.Text
+  approvedById            String?            @db.Uuid
+  approvedByInstitutionId String?            @db.Uuid
+  approvedAt              DateTime?          @db.Timestamptz(3)
+  status                  SubstitutionStatus @default(PENDING)
+  createdAt               DateTime           @default(now()) @db.Timestamptz(3)
+  updatedAt               DateTime           @updatedAt @db.Timestamptz(3)
+
+  institution       Institution @relation(fields: [institutionId], references: [id], onDelete: Restrict)
+  schedule          Schedule    @relation(fields: [institutionId, scheduleId], references: [institutionId, id], onDelete: Restrict)
+  originalTeacher   Teacher     @relation("OriginalTeacher", fields: [institutionId, originalTeacherId], references: [institutionId, id], onDelete: Restrict)
+  substituteTeacher Teacher     @relation("SubstituteTeacher", fields: [institutionId, substituteTeacherId], references: [institutionId, id], onDelete: Restrict)
+  approvedBy        User?       @relation("SubstitutionApprover", fields: [approvedByInstitutionId, approvedById], references: [institutionId, id], onDelete: Restrict)
+
+  @@unique([id, institutionId])
+  @@index([institutionId, scheduleId, substitutionDate])
+  @@index([institutionId, substituteTeacherId, substitutionDate])
+}
+
+// ============================================================
+// ATTENDANCE
+// ============================================================
+// NOTE:
+// 1. Partial unique index for one OPEN segment/session is a PostgreSQL
+//    migration requirement and cannot be fully expressed in Prisma schema.
+// 2. Cross-tenant composite FK hardening is a physical-schema decision;
+//    service-layer tenant checks remain mandatory.
+// 3. Numeric precision below is intentionally higher than reporting precision.
+// ============================================================
+
+model AttendanceSession {
+  id            String                  @id @default(uuid()) @db.Uuid
+  institutionId String                  @db.Uuid
+  scheduleId    String                  @db.Uuid
+  sessionDate   DateTime                @db.Date
+  status        AttendanceSessionStatus @default(OPEN)
+
+  // Historical snapshot: these values must not change when master data changes.
+  primaryTeacherIdSnapshot   String    @db.Uuid
+  primaryTeacherCodeSnapshot String    @db.VarChar(50)
+  primaryTeacherNameSnapshot String    @db.VarChar(200)
+  classIdSnapshot            String    @db.Uuid
+  classCodeSnapshot          String    @db.VarChar(50)
+  classNameSnapshot          String    @db.VarChar(100)
+  subjectIdSnapshot          String    @db.Uuid
+  subjectCodeSnapshot        String    @db.VarChar(50)
+  subjectNameSnapshot        String    @db.VarChar(150)
+  subjectOfferingIdSnapshot  String?   @db.Uuid
+  roomIdSnapshot             String?   @db.Uuid
+  roomCodeSnapshot           String?   @db.VarChar(50)
+  roomNameSnapshot           String?   @db.VarChar(100)
+  startPeriodNumberSnapshot  Int
+  endPeriodNumberSnapshot    Int
+  startTimeSnapshot          DateTime  @db.Time(0)
+  endTimeSnapshot            DateTime  @db.Time(0)
+  scheduledJpSnapshot        Decimal   @db.Decimal(10, 4)
+  openedAt                   DateTime  @default(now()) @db.Timestamptz(3)
+  finalizedAt                DateTime? @db.Timestamptz(3)
+  cancelledAt                DateTime? @db.Timestamptz(3)
+  createdAt                  DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt                  DateTime  @updatedAt @db.Timestamptz(3)
+
+  institution        Institution                @relation(fields: [institutionId], references: [id], onDelete: Restrict)
+  schedule           Schedule                   @relation(fields: [institutionId, scheduleId], references: [institutionId, id], onDelete: Restrict)
+  segments           AttendanceSessionSegment[]
+  teacherAttendances TeacherAttendance[]
+  studentAttendances StudentAttendance[]
+  adjustments        AttendanceAdjustment[]
+
+  @@unique([scheduleId, sessionDate])
+  @@unique([id, institutionId])
+  @@index([institutionId, sessionDate, status])
+  @@index([institutionId, scheduleId, sessionDate])
+}
+
+model AttendanceSessionSegment {
+  id                  String                  @id @default(uuid()) @db.Uuid
+  institutionId       String                  @db.Uuid
+  attendanceSessionId String                  @db.Uuid
+  teacherId           String                  @db.Uuid
+  startedAt           DateTime                @db.Timestamptz(3)
+  endedAt             DateTime?               @db.Timestamptz(3)
+  status              AttendanceSegmentStatus @default(OPEN)
+  allocatedJp         Decimal                 @db.Decimal(12, 8)
+  createdAt           DateTime                @default(now()) @db.Timestamptz(3)
+  updatedAt           DateTime                @updatedAt @db.Timestamptz(3)
+
+  institution Institution       @relation(fields: [institutionId], references: [id], onDelete: Restrict)
+  session     AttendanceSession @relation(fields: [institutionId, attendanceSessionId], references: [institutionId, id], onDelete: Restrict)
+  teacher     Teacher           @relation(fields: [institutionId, teacherId], references: [institutionId, id], onDelete: Restrict)
+
+  @@unique([id, institutionId])
+  @@index([institutionId, attendanceSessionId, teacherId])
+  @@index([attendanceSessionId, teacherId])
+}
+
+model TeacherAttendance {
+  id                  String                  @id @default(uuid()) @db.Uuid
+  institutionId       String                  @db.Uuid
+  attendanceSessionId String                  @db.Uuid
+  scheduleId          String                  @db.Uuid
+  teacherId           String                  @db.Uuid
+  attendanceDate      DateTime                @db.Date
+  teacherCodeSnapshot String                  @db.VarChar(50)
+  teacherNameSnapshot String                  @db.VarChar(200)
+  assignedJp          Decimal                 @db.Decimal(10, 4)
+  allocatedJp         Decimal                 @db.Decimal(12, 8)
+  status              TeacherAttendanceStatus
+  createdAt           DateTime                @default(now()) @db.Timestamptz(3)
+  updatedAt           DateTime                @updatedAt @db.Timestamptz(3)
+
+  institution Institution       @relation(fields: [institutionId], references: [id], onDelete: Restrict)
+  session     AttendanceSession @relation(fields: [institutionId, attendanceSessionId], references: [institutionId, id], onDelete: Restrict)
+  schedule    Schedule          @relation(fields: [institutionId, scheduleId], references: [institutionId, id], onDelete: Restrict)
+  teacher     Teacher           @relation(fields: [institutionId, teacherId], references: [institutionId, id], onDelete: Restrict)
+
+  adjustments AttendanceAdjustment[]
+
+  @@unique([attendanceSessionId, teacherId])
+  @@unique([id, institutionId])
+  @@index([institutionId, teacherId, attendanceDate])
+  @@index([institutionId, teacherId, scheduleId])
+}
+
+model StudentAttendance {
+  id                  String                  @id @default(uuid()) @db.Uuid
+  institutionId       String                  @db.Uuid
+  attendanceSessionId String                  @db.Uuid
+  studentId           String                  @db.Uuid
+  studentCodeSnapshot String                  @db.VarChar(50)
+  studentNameSnapshot String                  @db.VarChar(200)
+  classIdSnapshot     String                  @db.Uuid
+  classCodeSnapshot   String                  @db.VarChar(50)
+  classNameSnapshot   String                  @db.VarChar(100)
+  status              StudentAttendanceStatus
+  recordedAt          DateTime                @default(now()) @db.Timestamptz(3)
+  createdAt           DateTime                @default(now()) @db.Timestamptz(3)
+  updatedAt           DateTime                @updatedAt @db.Timestamptz(3)
+
+  institution Institution       @relation(fields: [institutionId], references: [id], onDelete: Restrict)
+  session     AttendanceSession @relation(fields: [institutionId, attendanceSessionId], references: [institutionId, id], onDelete: Restrict)
+  student     Student           @relation(fields: [institutionId, studentId], references: [institutionId, id], onDelete: Restrict)
+
+  adjustments AttendanceAdjustment[]
+
+  @@unique([attendanceSessionId, studentId])
+  @@unique([id, institutionId])
+  @@index([institutionId, studentId, recordedAt])
+}
+
+model GateEvent {
+  id            String   @id @default(uuid()) @db.Uuid
+  institutionId String   @db.Uuid
+  studentId     String   @db.Uuid
+  eventAt       DateTime @db.Timestamptz(3)
+  eventDate     DateTime @db.Date
+  clientEventId String?  @db.VarChar(100)
+  source        String?  @db.VarChar(50)
+  createdAt     DateTime @default(now()) @db.Timestamptz(3)
+
+  institution Institution @relation(fields: [institutionId], references: [id], onDelete: Restrict)
+  student     Student     @relation(fields: [institutionId, studentId], references: [institutionId, id], onDelete: Restrict)
+
+  @@unique([id, institutionId])
+  @@unique([institutionId, clientEventId])
+  @@index([institutionId, studentId, eventDate])
+}
+
+model AttendanceAdjustment {
+  id                             String                     @id @default(uuid()) @db.Uuid
+  institutionId                  String                     @db.Uuid
+  attendanceSessionId            String?                    @db.Uuid
+  attendanceSessionInstitutionId String?                    @db.Uuid
+  targetType                     AttendanceAdjustmentTarget
+  studentAttendanceId            String?                    @db.Uuid
+  studentAttendanceInstitutionId String?                    @db.Uuid
+  teacherAttendanceId            String?                    @db.Uuid
+  teacherAttendanceInstitutionId String?                    @db.Uuid
+  beforeStatus                   String                     @db.VarChar(30)
+  afterStatus                    String                     @db.VarChar(30)
+  reason                         String                     @db.Text
+  createdById                    String                     @db.Uuid
+  createdAt                      DateTime                   @default(now()) @db.Timestamptz(3)
+
+  institution       Institution        @relation(fields: [institutionId], references: [id], onDelete: Restrict)
+  session           AttendanceSession? @relation(fields: [attendanceSessionInstitutionId, attendanceSessionId], references: [institutionId, id], onDelete: Restrict)
+  studentAttendance StudentAttendance? @relation(fields: [studentAttendanceInstitutionId, studentAttendanceId], references: [institutionId, id], onDelete: Restrict)
+  teacherAttendance TeacherAttendance? @relation(fields: [teacherAttendanceInstitutionId, teacherAttendanceId], references: [institutionId, id], onDelete: Restrict)
+  createdBy         User               @relation("AdjustmentActor", fields: [institutionId, createdById], references: [institutionId, id], onDelete: Restrict)
+
+  @@unique([id, institutionId])
+  @@index([institutionId, attendanceSessionId, createdAt])
+}
+
+// ============================================================
+// AUDIT / NOTIFICATION / SYNC
+// ============================================================
+
+model AuditLog {
+  id                 String   @id @default(uuid()) @db.Uuid
+  institutionId      String   @db.Uuid
+  actorUserId        String?  @db.Uuid
+  actorInstitutionId String?  @db.Uuid
+  action             String   @db.VarChar(50)
+  entity             String   @db.VarChar(100)
+  entityId           String   @db.Uuid
+  beforeData         Json?
+  afterData          Json?
+  createdAt          DateTime @default(now()) @db.Timestamptz(3)
+
+  institution Institution @relation(fields: [institutionId], references: [id], onDelete: Restrict)
+  actor       User?       @relation(fields: [actorInstitutionId, actorUserId], references: [institutionId, id], onDelete: Restrict)
+
+  @@unique([id, institutionId])
+  @@index([institutionId, entity, entityId])
+  @@index([institutionId, actorUserId, createdAt])
+}
+
+model NotificationLog {
+  id                String             @id @default(uuid()) @db.Uuid
+  institutionId     String             @db.Uuid
+  recipient         String             @db.VarChar(200)
+  notificationType  String             @db.VarChar(50)
+  status            NotificationStatus @default(PENDING)
+  providerReference String?            @db.VarChar(150)
+  payload           Json?
+  sentAt            DateTime?          @db.Timestamptz(3)
+  createdAt         DateTime           @default(now()) @db.Timestamptz(3)
+
+  institution Institution @relation(fields: [institutionId], references: [id], onDelete: Restrict)
+
+  @@unique([id, institutionId])
+  @@index([institutionId, notificationType, createdAt])
+}
+
+model ProcessedEvent {
+  id            String               @id @default(uuid()) @db.Uuid
+  institutionId String               @db.Uuid
+  clientEventId String               @db.VarChar(100)
+  eventType     String               @db.VarChar(100)
+  status        ProcessedEventStatus @default(PROCESSED)
+  processedAt   DateTime             @default(now()) @db.Timestamptz(3)
+  result        Json?
+
+  institution Institution @relation(fields: [institutionId], references: [id], onDelete: Restrict)
+
+  @@unique([id, institutionId])
+  @@unique([institutionId, clientEventId])
+  @@index([institutionId, eventType, processedAt])
+}
+
+// ============================================================
+// OPTIONAL COMPOSITE RELATIONS
+// ============================================================
+// Optional tenant-sensitive relations use a nullable composite FK pair:
+// <entity>InstitutionId + <entity>Id. Both are NULL when the relation is
+// absent. Raw PostgreSQL CHECK constraints enforce pair consistency and
+// require the optional institution key to equal this row's institutionId.
+// This preserves tenant-safe composite FKs while satisfying Prisma's
+// optional composite relation requirements.
+
+// ============================================================
+// PHYSICAL SCHEMA V1.3 NOTES
+// ============================================================
+// 1. Tenant-sensitive relations use composite FK (institutionId, id).
+// 2. Historical attendance uses snapshot columns; snapshot IDs are not
+//    declared as FKs because they represent historical facts.
+// 3. PostgreSQL CHECK, partial unique, exclusion constraints and selected
+//    cross-row invariants are applied by raw migration SQL.
+// 4. AttendanceSession is the concurrency serialization root.
+// 5. TeacherAttendance.attendanceDate must equal AttendanceSession.sessionDate
+//    and is enforced transactionally (cross-table CHECK is not possible).

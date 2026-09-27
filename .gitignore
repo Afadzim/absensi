@@ -38,3 +38,10 @@ coverage/
 # Prisma
 *.db
 *.db-journal
+/apps/api/generated/prisma/
+
+# Local agent tooling
+.agents/
+.claude/
+.windsurf/
+skills-lock.json
