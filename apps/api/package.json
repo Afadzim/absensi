@@ -8,6 +8,7 @@
     "build": "tsc",
     "start": "node dist/server.js",
     "typecheck": "tsc --noEmit",
+    "generate:schedule-occurrences": "tsx src/modules/phase8/generate-occurrences.ts",
     "test": "vitest run",
     "test:watch": "vitest"
   },

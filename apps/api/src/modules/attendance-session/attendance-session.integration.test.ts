@@ -71,7 +71,7 @@ describe(
       authSessionService = {
         validateSession: vi.fn().mockResolvedValue({
           sessionId: "test-session",
-          userId: "test-user",
+          userId: fixture.userId,
           institutionId: fixture.institutionId,
           teacherId: fixture.teacherId,
           roles: ["TEST"],
@@ -337,6 +337,7 @@ describe(
 
         expect(
           finalizeResponse.statusCode,
+          JSON.stringify(finalizeResponse.json()),
         ).toBe(200);
 
         expect(

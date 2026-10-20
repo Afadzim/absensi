@@ -34,6 +34,7 @@ function createAuthSessionServiceMock() {
       teacherId: TEACHER_ID,
       roles: ["TEACHER"],
       permissions: [
+        "attendance.student.roster.read",
         "attendance.session.create",
         "attendance.session.open",
         "attendance.session.handover",
@@ -50,6 +51,7 @@ function createAuthSessionServiceMock() {
 
 function createServiceMock() {
   return {
+    listByDate: vi.fn().mockResolvedValue([]),
     createSession: vi.fn().mockResolvedValue({
       id: SESSION_ID,
       status: "OPEN",
@@ -184,6 +186,30 @@ describe("AttendanceSession HTTP routes", () => {
     ).toBeLessThanOrEqual(
       afterRequest.getTime(),
     );
+  });
+
+  it("GET /api/v1/attendance-sessions filters by date and authenticated institution", async () => {
+    const response = await authenticatedInject({
+      method: "GET",
+      url: "/api/v1/attendance-sessions?sessionDate=2026-09-25",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ data: [] });
+    expect(service.listByDate).toHaveBeenCalledWith({
+      institutionId: INSTITUTION_ID,
+      sessionDate: new Date("2026-09-25T00:00:00.000Z"),
+    });
+  });
+
+  it("GET /api/v1/attendance-sessions rejects invalid dates", async () => {
+    const response = await authenticatedInject({
+      method: "GET",
+      url: "/api/v1/attendance-sessions?sessionDate=2026-02-30",
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(service.listByDate).not.toHaveBeenCalled();
   });
 
   it("POST create mengambil institution dari AuthContext, bukan header klien", async () => {
@@ -350,7 +376,15 @@ describe("AttendanceSession HTTP routes", () => {
       institutionId: INSTITUTION_ID,
       sessionId: SESSION_ID,
       teacherId: TEACHER_ID,
+      auditContext: {
+        auth: {
+          institutionId: INSTITUTION_ID,
+          teacherId: TEACHER_ID,
+        },
+        ipAddress: "127.0.0.1",
+      },
     });
+    expect(input.auditContext.requestId).toEqual(expect.any(String));
 
     expect(input.handoverAt)
       .toBeInstanceOf(Date);

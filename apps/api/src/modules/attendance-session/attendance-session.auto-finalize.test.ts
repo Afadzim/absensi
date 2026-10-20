@@ -18,6 +18,21 @@ describe("AttendanceSessionService - auto finalize", () => {
 
   const service = new AttendanceSessionService();
 
+  function auditContext() {
+    return {
+      auth: {
+        sessionId: "auto-finalize-test-session",
+        userId: fixture.userId,
+        institutionId: fixture.institutionId,
+        teacherId: null,
+        roles: ["SYSTEM"],
+        permissions: [],
+      },
+      requestId: "auto-finalize-test",
+      ipAddress: "127.0.0.1",
+    };
+  }
+
   beforeEach(async () => {
     fixture = await createAttendanceSessionHandoverFixture();
   });
@@ -51,6 +66,7 @@ describe("AttendanceSessionService - auto finalize", () => {
         institutionId: fixture.institutionId,
         sessionId: session.id,
         now: beforeEndTime,
+        auditContext: auditContext(),
       }),
     ).rejects.toThrow(
       "AttendanceSession has not reached its scheduled end time",
@@ -105,6 +121,7 @@ describe("AttendanceSessionService - auto finalize", () => {
         institutionId: fixture.institutionId,
         sessionId: session.id,
         now: lateAutoFinalizeAt,
+        auditContext: auditContext(),
       });
 
     expect(finalizedSession.status).toBe("FINALIZED");
@@ -129,6 +146,26 @@ describe("AttendanceSessionService - auto finalize", () => {
     expect(persistedSegment.endedAt).toEqual(
       new Date("2026-09-25T08:20:00.000Z"),
     );
+
+    const teacherAttendance =
+      await prisma.teacherAttendance.findUniqueOrThrow({
+        where: {
+          attendanceSessionId_teacherId: {
+            attendanceSessionId: session.id,
+            teacherId: fixture.teacherId,
+          },
+        },
+      });
+    expect(teacherAttendance.status).toBe("HADIR");
+    expect(Number(teacherAttendance.allocatedJp)).toBe(2);
+    expect(
+      await prisma.auditLog.count({
+        where: {
+          institutionId: fixture.institutionId,
+          entity: { in: ["AttendanceSession", "TeacherAttendance"] },
+        },
+      }),
+    ).toBeGreaterThan(0);
   });
   it("AS-011: auto-finalize menutup session yang sudah melewati endTimeSnapshot", async () => {
     const session = await service.createSession({
@@ -158,6 +195,7 @@ describe("AttendanceSessionService - auto finalize", () => {
         institutionId: fixture.institutionId,
         sessionId: session.id,
         now: finalizedAt,
+        auditContext: auditContext(),
       });
 
     expect(finalizedSession.id).toBe(session.id);
@@ -190,5 +228,3 @@ describe("AttendanceSessionService - auto finalize", () => {
     expect(openSegments).toBe(0);
   });
 });
-
-

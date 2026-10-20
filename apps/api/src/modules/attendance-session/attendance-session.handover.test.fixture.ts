@@ -2,7 +2,10 @@
 
 export type AttendanceSessionHandoverFixture = {
   institutionId: string;
+  userId: string;
   scheduleId: string;
+  academicYearId: string;
+  classId: string;
   teacherId: string;
   substituteTeacherId: string;
   sessionDate: Date;
@@ -127,6 +130,14 @@ export async function createAttendanceSessionHandoverFixture(): Promise<Attendan
     },
   });
 
+  await testPrisma.scheduleClassParticipant.create({
+    data: {
+      institutionId: institution.id,
+      scheduleId: schedule.id,
+      classId: classRoom.id,
+    },
+  });
+
   await testPrisma.teacherSubstitution.create({
     data: {
       institutionId: institution.id,
@@ -148,12 +159,63 @@ export async function createAttendanceSessionHandoverFixture(): Promise<Attendan
 
   return {
     institutionId: institution.id,
+    userId: approver.id,
     scheduleId: schedule.id,
+    academicYearId: academicYear.id,
+    classId: classRoom.id,
     teacherId: teacher.id,
     substituteTeacherId: substituteTeacher.id,
     sessionDate: SESSION_DATE,
 
     cleanup: async () => {
+      const hasAuditLogs = (await testPrisma.auditLog.count({
+        where: {
+          institutionId: institution.id,
+        },
+      })) > 0;
+
+      await testPrisma.studentAttendance.deleteMany({
+        where: {
+          institutionId: institution.id,
+        },
+      });
+
+      await testPrisma.teacherAttendance.deleteMany({
+        where: {
+          institutionId: institution.id,
+        },
+      });
+
+      await testPrisma.gateEvent.deleteMany({
+        where: {
+          institutionId: institution.id,
+        },
+      });
+
+      await testPrisma.studentAdministrativeStatus.deleteMany({
+        where: {
+          institutionId: institution.id,
+        },
+      });
+
+      await testPrisma.studentClassEnrollment.deleteMany({
+        where: {
+          institutionId: institution.id,
+        },
+      });
+
+      await testPrisma.scheduleClassParticipant.deleteMany({
+        where: {
+          institutionId: institution.id,
+        },
+      });
+
+      await testPrisma.student.deleteMany({
+        where: {
+          institutionId: institution.id,
+        },
+      });
+
       await testPrisma.attendanceSessionSegment.deleteMany({
         where: {
           institutionId: institution.id,
@@ -161,6 +223,12 @@ export async function createAttendanceSessionHandoverFixture(): Promise<Attendan
       });
 
       await testPrisma.attendanceSession.deleteMany({
+        where: {
+          institutionId: institution.id,
+        },
+      });
+
+      await testPrisma.scheduleClassParticipant.deleteMany({
         where: {
           institutionId: institution.id,
         },
@@ -214,17 +282,19 @@ export async function createAttendanceSessionHandoverFixture(): Promise<Attendan
         },
       });
 
-      await testPrisma.user.deleteMany({
-        where: {
-          institutionId: institution.id,
-        },
-      });
+      if (!hasAuditLogs) {
+        await testPrisma.user.deleteMany({
+          where: {
+            institutionId: institution.id,
+          },
+        });
 
-      await testPrisma.institution.delete({
-        where: {
-          id: institution.id,
-        },
-      });
+        await testPrisma.institution.delete({
+          where: {
+            id: institution.id,
+          },
+        });
+      }
     },
   };
 }

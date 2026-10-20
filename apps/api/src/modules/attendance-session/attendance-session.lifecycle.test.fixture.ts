@@ -168,6 +168,10 @@ export async function createAttendanceSessionLifecycleFixture(): Promise<Attenda
     endPeriodNumber: 2,
 
     cleanup: async () => {
+      const hasAuditLogs = (await testPrisma.auditLog.count({
+        where: { institutionId: institution.id },
+      })) > 0;
+
       await testPrisma.attendanceSessionSegment.deleteMany({
         where: {
           institutionId: institution.id,
@@ -228,17 +232,19 @@ export async function createAttendanceSessionLifecycleFixture(): Promise<Attenda
         },
       });
 
-      await testPrisma.user.deleteMany({
-        where: {
-          institutionId: institution.id,
-        },
-      });
+      if (!hasAuditLogs) {
+        await testPrisma.user.deleteMany({
+          where: {
+            institutionId: institution.id,
+          },
+        });
 
-      await testPrisma.institution.delete({
-        where: {
-          id: institution.id,
-        },
-      });
+        await testPrisma.institution.delete({
+          where: {
+            id: institution.id,
+          },
+        });
+      }
     },
   };
 }

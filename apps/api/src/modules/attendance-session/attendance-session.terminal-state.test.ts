@@ -215,6 +215,18 @@ describe("AttendanceSessionService - terminal state protection", () => {
         handoverAt: new Date(
           "2026-09-25T08:05:00.000Z",
         ),
+        auditContext: {
+          auth: {
+            sessionId: "test-session",
+            userId: fixture.userId,
+            institutionId: fixture.institutionId,
+            teacherId: fixture.substituteTeacherId,
+            roles: ["TEACHER"],
+            permissions: [],
+          },
+          requestId: "terminal-handover-test",
+          ipAddress: "127.0.0.1",
+        },
       }),
     ).rejects.toThrow(
       "AttendanceSession is not OPEN",
@@ -372,7 +384,6 @@ describe("AttendanceSessionService - terminal state protection", () => {
     expect(persistedSession.status).toBe("FINALIZED");
   });
 });
-
 
 
 

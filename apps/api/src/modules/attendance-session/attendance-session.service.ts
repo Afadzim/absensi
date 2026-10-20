@@ -1,5 +1,9 @@
 import { prisma } from "../../lib/prisma.js";
 import { getIsoWeekday } from "../schedule/schedule.validation.js";
+import {
+  AttendanceEngineService,
+  type AttendanceAuditContext,
+} from "./attendance-engine.service.js";
 
 type PrismaTransaction = Parameters<
   Parameters<typeof prisma.$transaction>[0]
@@ -9,9 +13,22 @@ type LockedSession = Awaited<
   ReturnType<AttendanceSessionService["getLockedSession"]>
 >;
 
+function timeOfDayMilliseconds(value: Date): number {
+  return (
+    value.getUTCHours() * 60 * 60 * 1000 +
+    value.getUTCMinutes() * 60 * 1000 +
+    value.getUTCSeconds() * 1000
+  );
+}
+
 export interface CreateAttendanceSessionInput {
   institutionId: string;
   scheduleId: string;
+  sessionDate: Date;
+}
+
+export interface ListAttendanceSessionsInput {
+  institutionId: string;
   sessionDate: Date;
 }
 
@@ -27,12 +44,14 @@ export interface HandoverInput {
   sessionId: string;
   teacherId: string;
   handoverAt: Date;
+  auditContext: AttendanceAuditContext;
 }
 
 export interface FinalizeInput {
   institutionId: string;
   sessionId: string;
   finalizedAt: Date;
+  auditContext?: AttendanceAuditContext;
 }
 
 export interface CancelInput {
@@ -45,9 +64,47 @@ export interface AutoFinalizeExpiredSessionInput {
   institutionId: string;
   sessionId: string;
   now: Date;
+  auditContext: AttendanceAuditContext;
 }
 
 export class AttendanceSessionService {
+  constructor(
+    private readonly attendanceEngine = new AttendanceEngineService(),
+  ) {}
+
+  async listByDate(input: ListAttendanceSessionsInput) {
+    const rows = await prisma.attendanceSession.findMany({
+      where: {
+        institutionId: input.institutionId,
+        sessionDate: input.sessionDate,
+      },
+      select: {
+        id: true,
+        scheduleId: true,
+        sessionDate: true,
+        status: true,
+        primaryTeacherIdSnapshot: true,
+        primaryTeacherNameSnapshot: true,
+        classNameSnapshot: true,
+        subjectNameSnapshot: true,
+        startTimeSnapshot: true,
+        endTimeSnapshot: true,
+        scheduledJpSnapshot: true,
+        segments: {
+          where: { status: "OPEN" },
+          select: { teacherId: true },
+          take: 1,
+        },
+      },
+      orderBy: [{ startTimeSnapshot: "asc" }, { id: "asc" }],
+    });
+
+    return rows.map(({ segments, ...session }) => ({
+      ...session,
+      openSegmentTeacherId: segments[0]?.teacherId ?? null,
+    }));
+  }
+
   /**
    * Serialization root untuk seluruh mutasi kritis
    * terhadap AttendanceSession.
@@ -402,6 +459,13 @@ export class AttendanceSessionService {
           );
         }
 
+        await this.assertTeacherMayEndSegment(
+          tx,
+          session,
+          openSegment.teacherId,
+          openSegment.startedAt,
+          handoverAt,
+        );
         await this.assertTeacherCanRunSession(
           tx,
           session,
@@ -422,7 +486,7 @@ export class AttendanceSessionService {
           },
         });
 
-        return tx.attendanceSessionSegment.create({
+        const nextSegment = await tx.attendanceSessionSegment.create({
           data: {
             institutionId,
             attendanceSessionId: sessionId,
@@ -432,6 +496,18 @@ export class AttendanceSessionService {
             allocatedJp: 0,
           },
         });
+        await this.attendanceEngine.auditSegmentHandover(
+          tx,
+          input.auditContext,
+          openSegment,
+          {
+            ...openSegment,
+            endedAt: handoverAt,
+            status: "CLOSED",
+          },
+          nextSegment,
+        );
+        return nextSegment;
       },
     );
   }
@@ -473,6 +549,13 @@ export class AttendanceSessionService {
         }
 
         if (openSegment) {
+          const segmentEnd = await this.authorizedSegmentEnd(
+            tx,
+            session,
+            openSegment.teacherId,
+            openSegment.startedAt,
+            finalizedAt,
+          );
           await tx.attendanceSessionSegment.update({
             where: {
               id_institutionId: {
@@ -481,13 +564,19 @@ export class AttendanceSessionService {
               },
             },
             data: {
-              endedAt: finalizedAt,
+              endedAt: segmentEnd,
               status: "CLOSED",
             },
           });
         }
 
-        return tx.attendanceSession.update({
+        await this.attendanceEngine.finalizeWithinTransaction(
+          tx,
+          input.auditContext,
+          session,
+        );
+
+        const finalized = await tx.attendanceSession.update({
           where: {
             id_institutionId: {
               id: sessionId,
@@ -499,6 +588,13 @@ export class AttendanceSessionService {
             finalizedAt,
           },
         });
+        await this.attendanceEngine.auditSessionFinalization(
+          tx,
+          input.auditContext,
+          session,
+          finalized,
+        );
+        return finalized;
       },
     );
   }
@@ -572,7 +668,13 @@ export class AttendanceSessionService {
           });
 
         if (openSegment) {
-          const segmentEndedAt = endTimeDate;
+          const segmentEndedAt = await this.authorizedSegmentEnd(
+            tx,
+            session,
+            openSegment.teacherId,
+            openSegment.startedAt,
+            endTimeDate,
+          );
 
           if (segmentEndedAt <= openSegment.startedAt) {
             throw new Error(
@@ -594,7 +696,13 @@ export class AttendanceSessionService {
           });
         }
 
-        return tx.attendanceSession.update({
+        await this.attendanceEngine.finalizeWithinTransaction(
+          tx,
+          input.auditContext,
+          session,
+        );
+
+        const finalized = await tx.attendanceSession.update({
           where: {
             id_institutionId: {
               id: sessionId,
@@ -606,6 +714,13 @@ export class AttendanceSessionService {
             finalizedAt: now,
           },
         });
+        await this.attendanceEngine.auditSessionFinalization(
+          tx,
+          input.auditContext,
+          session,
+          finalized,
+        );
+        return finalized;
       },
     );
   }
@@ -700,9 +815,16 @@ export class AttendanceSessionService {
     if (teacherId === session.primaryTeacherIdSnapshot) {
       return;
     }
+    if (
+      at.toISOString().slice(0, 10) !==
+      session.sessionDate.toISOString().slice(0, 10)
+    ) {
+      throw new Error(
+        "Substitute session segment must start on its approved substitution date.",
+      );
+    }
 
-    const substitution =
-      await tx.teacherSubstitution.findFirst({
+    const substitutions = await tx.teacherSubstitution.findMany({
         where: {
           institutionId: session.institutionId,
           scheduleId: session.scheduleId,
@@ -711,20 +833,121 @@ export class AttendanceSessionService {
             session.primaryTeacherIdSnapshot,
           substituteTeacherId: teacherId,
           status: "APPROVED",
-          startTime: {
-            lte: at,
-          },
-          endTime: {
-            gte: at,
-          },
         },
       });
 
+    const atTime = timeOfDayMilliseconds(at);
+    const substitution = substitutions.find(
+      (candidate) =>
+        timeOfDayMilliseconds(candidate.startTime) <= atTime &&
+        atTime < timeOfDayMilliseconds(candidate.endTime),
+    );
     if (!substitution) {
       throw new Error(
         "Teacher is not authorized to run this session",
       );
     }
+    const lockedRows = await tx.$queryRaw<Array<{ id: string }>>`
+      SELECT "id"
+      FROM "TeacherSubstitution"
+      WHERE "id" = ${substitution.id}::uuid
+        AND "institutionId" = ${session.institutionId}::uuid
+        AND "status" = 'APPROVED'
+      FOR SHARE
+    `;
+    if (lockedRows.length === 0) {
+      throw new Error(
+        "Teacher is not authorized to run this session",
+      );
+    }
+  }
+
+  private async assertTeacherMayEndSegment(
+    tx: PrismaTransaction,
+    session: LockedSession,
+    teacherId: string,
+    startedAt: Date,
+    endedAt: Date,
+  ): Promise<void> {
+    if (teacherId === session.primaryTeacherIdSnapshot) return;
+    const endLimit = await this.substitutionEndForSegment(
+      tx,
+      session,
+      teacherId,
+      startedAt,
+    );
+    if (!endLimit || endedAt > endLimit) {
+      throw new Error(
+        "Substitute segment cannot continue beyond its approved substitution interval.",
+      );
+    }
+  }
+
+  private async authorizedSegmentEnd(
+    tx: PrismaTransaction,
+    session: LockedSession,
+    teacherId: string,
+    startedAt: Date,
+    requestedEnd: Date,
+  ): Promise<Date> {
+    if (teacherId === session.primaryTeacherIdSnapshot) return requestedEnd;
+    const endLimit = await this.substitutionEndForSegment(
+      tx,
+      session,
+      teacherId,
+      startedAt,
+    );
+    if (!endLimit) {
+      throw new Error(
+        "Substitute segment has no matching approved substitution.",
+      );
+    }
+    return requestedEnd > endLimit ? endLimit : requestedEnd;
+  }
+
+  private async substitutionEndForSegment(
+    tx: PrismaTransaction,
+    session: LockedSession,
+    teacherId: string,
+    startedAt: Date,
+  ): Promise<Date | null> {
+    const substitutions = await tx.teacherSubstitution.findMany({
+      where: {
+        institutionId: session.institutionId,
+        scheduleId: session.scheduleId,
+        substitutionDate: session.sessionDate,
+        originalTeacherId: session.primaryTeacherIdSnapshot,
+        substituteTeacherId: teacherId,
+        status: "APPROVED",
+      },
+    });
+    const startTime = timeOfDayMilliseconds(startedAt);
+    const substitution = substitutions.find(
+      (candidate) =>
+        timeOfDayMilliseconds(candidate.startTime) <= startTime &&
+        startTime < timeOfDayMilliseconds(candidate.endTime),
+    );
+    if (!substitution) return null;
+    const lockedRows = await tx.$queryRaw<Array<{ id: string }>>`
+      SELECT "id"
+      FROM "TeacherSubstitution"
+      WHERE "id" = ${substitution.id}::uuid
+        AND "institutionId" = ${session.institutionId}::uuid
+        AND "status" = 'APPROVED'
+      FOR SHARE
+    `;
+    if (lockedRows.length === 0) return null;
+    const sessionDay = new Date(session.sessionDate);
+    return new Date(
+      Date.UTC(
+        sessionDay.getUTCFullYear(),
+        sessionDay.getUTCMonth(),
+        sessionDay.getUTCDate(),
+        substitution.endTime.getUTCHours(),
+        substitution.endTime.getUTCMinutes(),
+        substitution.endTime.getUTCSeconds(),
+      ),
+    );
   }
 
   private async getLockedSession(
@@ -762,4 +985,3 @@ export class AttendanceSessionService {
     return session;
   }
 }
-

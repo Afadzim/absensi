@@ -2,6 +2,7 @@ import { testPrisma } from "../../test/db.js";
 
 export type AttendanceSessionFixture = {
   institutionId: string;
+  userId: string;
   sessionId: string;
   scheduleId: string;
   teacherId: string;
@@ -34,6 +35,15 @@ export async function createAttendanceSessionFixture(): Promise<AttendanceSessio
     data: {
       code: `INST-${code}`,
       name: `Attendance Session Test ${code}`,
+    },
+  });
+
+  const user = await testPrisma.user.create({
+    data: {
+      institutionId: institution.id,
+      username: `attendance-session-${s}`,
+      passwordHash: "TEST_ONLY_HASH",
+      status: "ACTIVE",
     },
   });
 
@@ -111,6 +121,14 @@ export async function createAttendanceSessionFixture(): Promise<AttendanceSessio
     },
   });
 
+  await testPrisma.scheduleClassParticipant.create({
+    data: {
+      institutionId: institution.id,
+      scheduleId: schedule.id,
+      classId: classRoom.id,
+    },
+  });
+
   const session = await testPrisma.attendanceSession.create({
     data: {
       institutionId: institution.id,
@@ -135,6 +153,7 @@ export async function createAttendanceSessionFixture(): Promise<AttendanceSessio
 
   return {
     institutionId: institution.id,
+    userId: user.id,
     sessionId: session.id,
     scheduleId: schedule.id,
     teacherId: teacher.id,
@@ -145,11 +164,24 @@ export async function createAttendanceSessionFixture(): Promise<AttendanceSessio
     startPeriodNumber: 1,
     endPeriodNumber: 2,
     cleanup: async () => {
+      const hasAuditLogs = (await testPrisma.auditLog.count({
+        where: { institutionId: institution.id },
+      })) > 0;
+
+      await testPrisma.studentAttendance.deleteMany({
+        where: { institutionId: institution.id },
+      });
+      await testPrisma.teacherAttendance.deleteMany({
+        where: { institutionId: institution.id },
+      });
       await testPrisma.attendanceSessionSegment.deleteMany({
         where: { institutionId: institution.id },
       });
 
       await testPrisma.attendanceSession.deleteMany({
+        where: { institutionId: institution.id },
+      });
+      await testPrisma.scheduleClassParticipant.deleteMany({
         where: { institutionId: institution.id },
       });
       await testPrisma.schedule.deleteMany({
@@ -173,9 +205,14 @@ export async function createAttendanceSessionFixture(): Promise<AttendanceSessio
       await testPrisma.academicYear.deleteMany({
         where: { institutionId: institution.id },
       });
-      await testPrisma.institution.delete({
-        where: { id: institution.id },
-      });
+      if (!hasAuditLogs) {
+        await testPrisma.user.delete({
+          where: { id: user.id },
+        });
+        await testPrisma.institution.delete({
+          where: { id: institution.id },
+        });
+      }
     },
   };
 }

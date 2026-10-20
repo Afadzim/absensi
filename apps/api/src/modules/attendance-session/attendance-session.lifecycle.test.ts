@@ -156,6 +156,18 @@ describe("AttendanceSessionService lifecycle - Gate A/B", () => {
         sessionId: existingSession.id,
         teacherId: fixture.substituteTeacherId,
         handoverAt,
+        auditContext: {
+          auth: {
+            sessionId: "lifecycle-session",
+            userId: fixture.approverUserId,
+            institutionId: fixture.institutionId,
+            teacherId: fixture.substituteTeacherId,
+            roles: ["TEACHER"],
+            permissions: [],
+          },
+          requestId: "lifecycle-handover-test",
+          ipAddress: "127.0.0.1",
+        },
       });
 
     expect(newSegment.status).toBe("OPEN");
@@ -218,4 +230,3 @@ describe("AttendanceSessionService lifecycle - Gate A/B", () => {
     expect(sessionAfter.status).toBe("OPEN");
   });
 });
-

@@ -47,6 +47,18 @@ describe("AttendanceSessionService - handover", () => {
       sessionId: session.id,
       teacherId: fixture.substituteTeacherId,
       handoverAt: new Date("2026-09-25T07:40:00.000Z"),
+      auditContext: {
+        auth: {
+          sessionId: "test-session",
+          userId: fixture.userId,
+          institutionId: fixture.institutionId,
+          teacherId: fixture.substituteTeacherId,
+          roles: ["TEACHER"],
+          permissions: [],
+        },
+        requestId: "handover-test",
+        ipAddress: "127.0.0.1",
+      },
     });
 
     expect(newSegment.attendanceSessionId).toBe(session.id);
@@ -138,6 +150,18 @@ describe("AttendanceSessionService - handover", () => {
         sessionId: session.id,
         teacherId: fixture.substituteTeacherId,
         handoverAt: new Date("2026-09-25T07:40:00.000Z"),
+        auditContext: {
+          auth: {
+            sessionId: "test-session",
+            userId: fixture.userId,
+            institutionId: fixture.institutionId,
+            teacherId: fixture.substituteTeacherId,
+            roles: ["TEACHER"],
+            permissions: [],
+          },
+          requestId: "handover-test",
+          ipAddress: "127.0.0.1",
+        },
       }),
     ).rejects.toThrow("TEST_HANDOVER_INSERT_FAILURE");
 

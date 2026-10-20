@@ -9,6 +9,7 @@ import {
 import type { AuthSessionService } from "../auth/auth.session.service.js";
 import { AUTH_PERMISSIONS } from "../auth/auth.permissions.js";
 import { createRequirePermission } from "../auth/auth.middleware.js";
+import { ATTENDANCE_ENGINE_PERMISSIONS } from "./attendance-engine.permissions.js";
 
 type CreateSessionBody = {
   scheduleId?: unknown;
@@ -56,6 +57,23 @@ function requireDate(
     );
   }
 
+  return parsed;
+}
+
+function requireDateOnly(value: string | undefined): Date {
+  if (!value || !/^\d{4}-\d{2}-\d{2}$/u.test(value)) {
+    throw new HttpRequestError(
+      400,
+      "sessionDate must use YYYY-MM-DD format",
+    );
+  }
+  const parsed = new Date(`${value}T00:00:00.000Z`);
+  if (
+    Number.isNaN(parsed.getTime()) ||
+    parsed.toISOString().slice(0, 10) !== value
+  ) {
+    throw new HttpRequestError(400, "sessionDate must be a valid calendar date");
+  }
   return parsed;
 }
 
@@ -144,6 +162,35 @@ export async function registerAttendanceSessionRoutes(
   const authorizeCancel = createRequirePermission(
     authSessionService,
     AUTH_PERMISSIONS.attendanceSessionCancel,
+  );
+  const authorizeRosterRead = createRequirePermission(
+    authSessionService,
+    ATTENDANCE_ENGINE_PERMISSIONS.studentRosterRead,
+  );
+
+  app.get<{ Querystring: { sessionDate?: string } }>(
+    "/api/v1/attendance-sessions",
+    { preHandler: authorizeRosterRead },
+    async (request, reply) => {
+      try {
+        const auth = request.auth;
+        if (!auth) {
+          return reply.status(401).send({
+            error: {
+              code: "UNAUTHENTICATED",
+              message: "Authentication required.",
+            },
+          });
+        }
+        const data = await service.listByDate({
+          institutionId: auth.institutionId,
+          sessionDate: requireDateOnly(request.query.sessionDate),
+        });
+        return reply.status(200).send({ data });
+      } catch (error) {
+        return sendDomainError(reply, error);
+      }
+    },
   );
 
   app.post<{
@@ -287,6 +334,12 @@ export async function registerAttendanceSessionRoutes(
             sessionId,
             teacherId: auth.teacherId,
             handoverAt: new Date(),
+            auditContext: {
+              auth,
+              requestId: request.id,
+              ipAddress: request.ip,
+              userAgent: request.headers["user-agent"],
+            },
           });
 
         return reply.status(200).send({
@@ -328,6 +381,12 @@ export async function registerAttendanceSessionRoutes(
             institutionId: auth.institutionId,
             sessionId,
             finalizedAt: new Date(),
+            auditContext: {
+              auth,
+              requestId: request.id,
+              ipAddress: request.ip,
+              userAgent: request.headers["user-agent"],
+            },
           });
 
         return reply.status(200).send({

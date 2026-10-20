@@ -94,6 +94,16 @@ enum StudentSubjectChoiceStatus {
   ENDED
 }
 
+enum AcademicCalendarDayType {
+  EFFECTIVE
+  NATIONAL_HOLIDAY
+  SPECIAL_HOLIDAY
+}
+
+enum ScheduleOccurrenceStatus {
+  EFFECTIVE
+}
+
 // ============================================================
 // TENANT & ACADEMIC STRUCTURE
 // ============================================================
@@ -131,6 +141,8 @@ model Institution {
   studentSubjectChoices         StudentSubjectChoice[]
   scheduleClassParticipants     ScheduleClassParticipant[]
   scheduleStudentParticipants   ScheduleStudentParticipant[]
+  academicCalendarDays           AcademicCalendarDay[]
+  scheduleOccurrences            ScheduleOccurrence[]
 
   @@unique([code])
 }
@@ -195,6 +207,7 @@ model User {
   teacherAdministrativeStatuses     TeacherAdministrativeStatus[] @relation("TeacherAdminStatusActor")
   studentAdministrativeStatuses     StudentAdministrativeStatus[] @relation("StudentAdminStatusActor")
   scheduleStudentParticipantChanges ScheduleStudentParticipant[]  @relation("ScheduleStudentParticipantActor")
+  academicCalendarChanges           AcademicCalendarDay[]           @relation("AcademicCalendarActor")
 
   @@unique([institutionId, username])
   @@unique([id, institutionId])
@@ -561,6 +574,7 @@ model Schedule {
   teacherAttendances  TeacherAttendance[]
   classParticipants   ScheduleClassParticipant[]
   studentParticipants ScheduleStudentParticipant[]
+  occurrences         ScheduleOccurrence[]
 
   @@unique([id, institutionId])
   @@index([institutionId, dayOfWeek])
@@ -569,6 +583,61 @@ model Schedule {
   @@index([institutionId, subjectId, dayOfWeek])
   @@index([institutionId, subjectOfferingId])
   @@index([institutionId, startPeriodNumber, endPeriodNumber])
+}
+
+model AcademicCalendarDay {
+  id                    String                    @id @default(uuid()) @db.Uuid
+  institutionId         String                    @db.Uuid
+  calendarDate          DateTime                  @db.Date
+  dayType               AcademicCalendarDayType
+  label                 String?                   @db.VarChar(200)
+  createdById           String                    @db.Uuid
+  generationCompletedAt DateTime?                 @db.Timestamptz(3)
+  createdAt             DateTime                  @default(now()) @db.Timestamptz(3)
+  updatedAt             DateTime                  @updatedAt @db.Timestamptz(3)
+
+  institution Institution @relation(fields: [institutionId], references: [id], onDelete: Restrict)
+  createdBy   User        @relation("AcademicCalendarActor", fields: [institutionId, createdById], references: [institutionId, id], onDelete: Restrict)
+  occurrences ScheduleOccurrence[]
+
+  @@unique([institutionId, calendarDate])
+  @@unique([id, institutionId])
+  @@index([institutionId, dayType, calendarDate])
+}
+
+model ScheduleOccurrence {
+  id                          String                    @id @default(uuid()) @db.Uuid
+  institutionId               String                    @db.Uuid
+  academicCalendarDayId       String                    @db.Uuid
+  scheduleId                  String                    @db.Uuid
+  occurrenceDate              DateTime                  @db.Date
+  status                      ScheduleOccurrenceStatus  @default(EFFECTIVE)
+  primaryTeacherIdSnapshot    String                    @db.Uuid
+  primaryTeacherCodeSnapshot  String                    @db.VarChar(50)
+  primaryTeacherNameSnapshot  String                    @db.VarChar(200)
+  classIdSnapshot             String                    @db.Uuid
+  classCodeSnapshot           String                    @db.VarChar(50)
+  classNameSnapshot           String                    @db.VarChar(100)
+  subjectIdSnapshot           String                    @db.Uuid
+  subjectCodeSnapshot         String                    @db.VarChar(50)
+  subjectNameSnapshot         String                    @db.VarChar(150)
+  startPeriodNumberSnapshot   Int
+  endPeriodNumberSnapshot     Int
+  startTimeSnapshot           DateTime                  @db.Time(0)
+  endTimeSnapshot             DateTime                  @db.Time(0)
+  scheduledJpSnapshot         Decimal                   @db.Decimal(10, 4)
+  createdAt                   DateTime                  @default(now()) @db.Timestamptz(3)
+
+  institution Institution         @relation(fields: [institutionId], references: [id], onDelete: Restrict)
+  calendar    AcademicCalendarDay  @relation(fields: [academicCalendarDayId, institutionId], references: [id, institutionId], onDelete: Restrict)
+  schedule    Schedule             @relation(fields: [institutionId, scheduleId], references: [institutionId, id], onDelete: Restrict)
+
+  @@unique([institutionId, scheduleId, occurrenceDate])
+  @@unique([id, institutionId])
+  @@index([institutionId, occurrenceDate, status])
+  @@index([institutionId, primaryTeacherIdSnapshot, occurrenceDate])
+  @@index([institutionId, classIdSnapshot, occurrenceDate])
+  @@index([institutionId, subjectIdSnapshot, occurrenceDate])
 }
 
 // ============================================================

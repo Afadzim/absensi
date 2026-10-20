@@ -164,6 +164,118 @@ is retained; an incorrect range must be corrected with an audited update.
 Student-subject choice effective dates use the same inclusive date input format,
 while their overlap semantics are unchanged by this phase.
 
+## PHASE 5 — Attendance engine
+
+The attendance engine uses the authenticated institution for every operation.
+Register the permission codes below in `Permission` and grant only the intended
+codes to owner-managed roles:
+
+```sql
+INSERT INTO "Permission" ("id", "code")
+SELECT gen_random_uuid(), code
+FROM unnest(ARRAY[
+  'attendance.gate.checkin',
+  'attendance.student.roster.read',
+  'attendance.student.mark',
+  'attendance.student.admin-status.create',
+  'attendance.student.admin-status.update'
+]) AS codes(code)
+ON CONFLICT ("code") DO NOTHING;
+```
+
+`POST /api/v1/gate-events/check-in` accepts `studentId`, ISO `eventAt`,
+`clientEventId`, and optional `source`. Gate events only establish roster
+eligibility; they do not create JP attendance. A retry with the same tenant and
+`clientEventId` plus the same student and timestamp returns the existing event.
+Reusing that ID for a different event returns `409`.
+The calendar date used for gate eligibility is derived in
+`ATTENDANCE_TIME_ZONE`, which defaults to `Asia/Jakarta`.
+
+`GET /api/v1/attendance-sessions?sessionDate=YYYY-MM-DD` lists only sessions
+for the authenticated institution and date. It requires
+`attendance.student.roster.read` and is used by the attendance PWA to prepare
+sessions while online.
+
+`GET /api/v1/attendance-sessions/{sessionId}/student-roster` returns schedule
+participants who have a gate event on the session date or an active
+administrative status. Gate-checked-in students have effective status `NORMAL`
+and can be marked while a teacher's segment is open. Administrative-only
+students appear with their status and cannot be marked present. Students with
+neither condition are omitted.
+
+`POST /api/v1/attendance-sessions/{sessionId}/student-attendance` accepts
+`studentId`. Only the teacher associated with the current open segment can
+mark a schedule participant who checked in on the session date. Repeating a
+successful mark returns the existing `HADIR` record. Each mutation requires
+the session CSRF token.
+
+Administrative student statuses are created at
+`POST /api/v1/student-administrative-statuses` and corrected with
+`PATCH /api/v1/student-administrative-statuses/{id}`. Requests use
+`studentId`, `type` (`IZIN`, `SAKIT`, or `PENUGASAN`), inclusive `validFrom`
+and optional inclusive `validTo`, plus optional `reason` and `auditReason`.
+Overlapping status ranges for one student are rejected by both the service and
+a PostgreSQL exclusion constraint. Records are corrected, not deleted; each
+create/update is written to the append-only audit log.
+
+Finalizing an `AttendanceSession` closes its open segment and writes the
+teacher attendance plus the student attendance for that single learning unit.
+Student `HADIR` entries marked during the session are preserved; checked-in
+students left unmarked become `ALPA`, and active administrative statuses are
+recorded for students without gate check-in. With no valid session segment, no
+student attendance is created. Segment JP is the scheduled JP prorated by the
+segment's overlap with the schedule time and clipped to the schedule bounds;
+multiple segments do not become separate learning units. Finalization and
+resulting attendance writes are atomic.
+
+## PHASE 6 — Substitution and handover
+
+Substitution management is tenant-scoped and uses owner-managed permissions:
+`attendance.substitution.read`, `.create`, `.approve`, and `.cancel`. Register
+the codes without granting them automatically:
+
+```sql
+INSERT INTO "Permission" ("id", "code")
+SELECT gen_random_uuid(), code
+FROM unnest(ARRAY[
+  'attendance.substitution.read',
+  'attendance.substitution.create',
+  'attendance.substitution.approve',
+  'attendance.substitution.cancel'
+]) AS codes(code)
+ON CONFLICT ("code") DO NOTHING;
+```
+
+`GET /api/v1/schedules/{scheduleId}/substitutions` lists substitution history
+with optional `substitutionDate`, `page`, and `pageSize` filters.
+`POST /api/v1/schedules/{scheduleId}/substitutions` creates a `PENDING` request
+using `substituteTeacherId`, `substitutionDate` (`YYYY-MM-DD`), `startTime`
+and `endTime` (`HH:mm`), and a required `reason`. The server derives the
+original teacher from the schedule/session snapshot; clients cannot nominate a
+different primary teacher. Times must be within the learning-unit schedule.
+Active `PENDING`/`APPROVED` ranges for the same schedule and date are
+half-open (`[startTime, endTime)`) and may be sequential but cannot overlap.
+The database enforces this rule as well as `endTime > startTime`.
+
+`POST /api/v1/substitutions/{id}/approve` and `/reject` transition only a
+`PENDING` request. Approval records the authenticated approver and timestamp;
+only `APPROVED` requests authorize a substitute to open a segment.
+`POST /api/v1/substitutions/{id}/cancel` cancels a `PENDING` request or an
+approved request that has not yet opened a segment. Requests are not deleted
+or edited: cancel and create a new request to preserve history. Creation and
+every status transition are written to the append-only audit log.
+
+The authenticated incoming teacher initiates
+`POST /api/v1/attendance-sessions/{sessionId}/handover`; the server closes the
+current segment and opens the next one atomically in the same learning unit.
+The incoming substitute must have an approved interval covering the handover
+time. A substitute segment cannot continue past its approved end; a late
+finalization closes it at that authorization boundary. Handover does not
+reset student attendance or finalize the session. Finalization remains a
+separate operation; it records the primary as `ALPA` when the primary did not
+teach and has no active administrative status, and records an actually
+teaching substitute as `HADIR`.
+
 Start the app workspaces from the repository root:
 
 ```powershell
@@ -210,3 +322,70 @@ and subject. This physical constraint is intentionally stronger than the
 two-column relation Prisma can represent; do not remove it when reviewing schema
 diffs or creating migrations. Migration deployments use `migrate deploy` so
 these committed PostgreSQL-specific constraints are preserved.
+
+## PHASE 8 — Academic calendar, occurrences, and reports
+
+Set `SYSTEM_EFFECTIVE_DATE` to `2026-07-15` (or the explicitly approved
+institutional cutoff) in the API environment. Official report requests before
+that date are rejected. Configure `ATTENDANCE_TIME_ZONE` consistently; it
+defaults to `Asia/Jakarta`.
+
+The owner-managed calendar is available at:
+
+- `GET /api/v1/academic-calendar?startDate=YYYY-MM-DD&endDate=YYYY-MM-DD`
+- `POST /api/v1/academic-calendar` with `calendarDate`, `dayType`
+  (`EFFECTIVE`, `NATIONAL_HOLIDAY`, or `SPECIAL_HOLIDAY`), and optional `label`
+  and `auditReason`.
+- `PATCH /api/v1/academic-calendar/{id}` to change `dayType` and/or `label`
+  before generation.
+- `GET /api/v1/attendance/reports?startDate=YYYY-MM-DD&endDate=YYYY-MM-DD`
+
+Every date must be entered explicitly; weekends are not inferred as holidays.
+Configure the semester's dates through its end because Semester currently has
+no date boundaries. There is no delete endpoint. Calendar changes are audited;
+once a calendar day has been processed, it and any generated schedule
+occurrences are immutable.
+
+Run the idempotent generator daily through an external scheduler, after
+calendar/schedule setup and before users need reports:
+
+```powershell
+npm run --workspace=@absensi-madrasah/api generate:schedule-occurrences
+```
+
+The generator processes explicitly configured calendar dates from the
+institutional current date forward. It snapshots matching recurring schedules
+for effective dates, records completion for holidays and days without
+schedules, and writes an audit record. It never backfills past dates or revises
+existing occurrences.
+Consequently, official reports are unavailable for dates without a calendar
+entry or a date whose calendar processing has not completed.
+Run it daily so newly configured dates are picked up. This does not infer
+weekends, holidays, or semester boundaries.
+
+Reports count student attendance only from finalized learning sessions and
+apply `(HADIR + PENUGASAN) / all final student statuses`. The teacher
+denominator is elapsed effective schedule occurrences attributed to the primary
+teacher; `DINAS` counts in the numerator with `HADIR`. Approved substitute
+activity is reported separately. Once an occurrence has ended, a missing
+final teacher record is derived as `ALPA` unless an active primary-teacher
+administrative status applies; an approved substitute without a teaching
+attendance record is separately shown as `ALPA`. Active administrative status
+takes precedence for the primary teacher. Segments never create additional
+occurrences or student denominators. The report identifies upcoming,
+finalized, open, cancelled, and elapsed-without-final-session occurrences.
+
+Register Phase 8 permissions in `Permission` and grant only the intended codes
+to owner-managed roles; no permissions or role grants are seeded:
+
+```sql
+INSERT INTO "Permission" ("id", "code")
+SELECT gen_random_uuid(), code
+FROM unnest(ARRAY[
+  'academic_calendar.read',
+  'academic_calendar.create',
+  'academic_calendar.update',
+  'attendance.report.read'
+]) AS codes(code)
+ON CONFLICT ("code") DO NOTHING;
+```
