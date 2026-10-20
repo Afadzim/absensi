@@ -7,6 +7,7 @@ import {
   vi,
 } from "vitest";
 import type { AttendanceSessionService } from "./attendance-session.service.js";
+import type { AuthSessionService } from "../auth/auth.session.service.js";
 import { buildApp } from "../../app.js";
 
 const INSTITUTION_ID =
@@ -20,6 +21,32 @@ const SESSION_ID =
 
 const SCHEDULE_ID =
   "44444444-4444-4444-8444-444444444444";
+
+const SESSION_TOKEN = "a".repeat(43);
+const CSRF_TOKEN = "b".repeat(43);
+
+function createAuthSessionServiceMock() {
+  return {
+    validateSession: vi.fn().mockResolvedValue({
+      sessionId: "session-id",
+      userId: "user-id",
+      institutionId: INSTITUTION_ID,
+      teacherId: TEACHER_ID,
+      roles: ["TEACHER"],
+      permissions: [
+        "attendance.session.create",
+        "attendance.session.open",
+        "attendance.session.handover",
+        "attendance.session.finalize",
+        "attendance.session.cancel",
+      ],
+      createdAt: new Date(),
+      lastSeenAt: new Date(),
+      expiresAt: new Date(Date.now() + 60_000),
+    }),
+    verifyCsrfToken: vi.fn().mockResolvedValue(true),
+  };
+}
 
 function createServiceMock() {
   return {
@@ -54,15 +81,40 @@ function createServiceMock() {
 
 describe("AttendanceSession HTTP routes", () => {
   let service: ReturnType<typeof createServiceMock>;
+  let authSessionService: ReturnType<
+    typeof createAuthSessionServiceMock
+  >;
   let app: ReturnType<typeof buildApp>;
 
   beforeEach(() => {
     service = createServiceMock();
+    authSessionService = createAuthSessionServiceMock();
     app = buildApp({
       attendanceSessionService:
         service as unknown as AttendanceSessionService,
+      authSessionService:
+        authSessionService as unknown as AuthSessionService,
     });
   });
+
+  function authenticatedInject(options: {
+    method: "POST" | "GET";
+    url: string;
+    headers?: Record<string, string>;
+    payload?: string | object | Buffer | NodeJS.ReadableStream;
+  }) {
+    return app.inject({
+      ...options,
+      cookies: {
+        "__Host-am_session": SESSION_TOKEN,
+        "__Host-am_csrf": CSRF_TOKEN,
+      },
+      headers: {
+        "x-csrf-token": CSRF_TOKEN,
+        ...options.headers,
+      },
+    });
+  }
 
   afterEach(async () => {
     await app.close();
@@ -72,11 +124,11 @@ describe("AttendanceSession HTTP routes", () => {
   it("POST /api/v1/attendance-sessions -> 201", async () => {
     const beforeRequest = new Date();
 
-    const response = await app.inject({
+    const response = await authenticatedInject({
       method: "POST",
       url: "/api/v1/attendance-sessions",
       headers: {
-        "x-institution-id": INSTITUTION_ID,
+        "x-institution-id": "99999999-9999-4999-8999-999999999999",
         "content-type": "application/json",
       },
       payload: {
@@ -134,8 +186,8 @@ describe("AttendanceSession HTTP routes", () => {
     );
   });
 
-  it("POST create tanpa institution context -> 400", async () => {
-    const response = await app.inject({
+  it("POST create mengambil institution dari AuthContext, bukan header klien", async () => {
+    const response = await authenticatedInject({
       method: "POST",
       url: "/api/v1/attendance-sessions",
       headers: {
@@ -148,48 +200,93 @@ describe("AttendanceSession HTTP routes", () => {
       },
     });
 
-    expect(response.statusCode).toBe(400);
-
-    expect(
-      response.json().error.code,
-    ).toBe("BAD_REQUEST");
-
-    expect(
-      service.createSession,
-    ).not.toHaveBeenCalled();
+    expect(response.statusCode).toBe(201);
+    expect(service.createSession).toHaveBeenCalledWith(
+      expect.objectContaining({ institutionId: INSTITUTION_ID }),
+    );
   });
 
-  it("POST create dengan UUID tidak valid -> 400", async () => {
+  it("POST create menolak session yang tidak terautentikasi", async () => {
     const response = await app.inject({
       method: "POST",
       url: "/api/v1/attendance-sessions",
+      payload: {
+        scheduleId: SCHEDULE_ID,
+        sessionDate: "2026-09-25T00:00:00.000Z",
+      },
+    });
+
+    expect(response.statusCode).toBe(401);
+    expect(response.json().error.code).toBe("UNAUTHENTICATED");
+    expect(service.createSession).not.toHaveBeenCalled();
+  });
+
+  it("POST create menolak user tanpa permission", async () => {
+    authSessionService.validateSession.mockResolvedValueOnce({
+      sessionId: "session-id",
+      userId: "user-id",
+      institutionId: INSTITUTION_ID,
+      teacherId: TEACHER_ID,
+      roles: [],
+      permissions: [],
+      createdAt: new Date(),
+      lastSeenAt: new Date(),
+      expiresAt: new Date(Date.now() + 60_000),
+    });
+
+    const response = await authenticatedInject({
+      method: "POST",
+      url: "/api/v1/attendance-sessions",
+      payload: {
+        scheduleId: SCHEDULE_ID,
+        sessionDate: "2026-09-25T00:00:00.000Z",
+      },
+    });
+
+    expect(response.statusCode).toBe(403);
+    expect(response.json().error.code).toBe("FORBIDDEN");
+    expect(service.createSession).not.toHaveBeenCalled();
+  });
+
+  it("POST create menolak CSRF token yang tidak valid", async () => {
+    authSessionService.verifyCsrfToken.mockResolvedValueOnce(false);
+
+    const response = await authenticatedInject({
+      method: "POST",
+      url: "/api/v1/attendance-sessions",
+      payload: {
+        scheduleId: SCHEDULE_ID,
+        sessionDate: "2026-09-25T00:00:00.000Z",
+      },
+    });
+
+    expect(response.statusCode).toBe(403);
+    expect(response.json().error.code).toBe("CSRF_INVALID");
+    expect(service.createSession).not.toHaveBeenCalled();
+  });
+
+  it("POST create menolak UUID jadwal tidak valid", async () => {
+    const response = await authenticatedInject({
+      method: "POST",
+      url: "/api/v1/attendance-sessions",
       headers: {
-        "x-institution-id":
-          "not-a-uuid",
         "content-type": "application/json",
       },
       payload: {
-        scheduleId: SCHEDULE_ID,
+        scheduleId: "not-a-uuid",
         sessionDate:
           "2026-09-25T00:00:00.000Z",
       },
     });
 
     expect(response.statusCode).toBe(400);
-
-    expect(
-      response.json().error.code,
-    ).toBe("BAD_REQUEST");
-
-    expect(
-      service.createSession,
-    ).not.toHaveBeenCalled();
+    expect(service.createSession).not.toHaveBeenCalled();
   });
 
   it("POST /open menggunakan waktu server", async () => {
     const beforeRequest = new Date();
 
-    const response = await app.inject({
+    const response = await authenticatedInject({
       method: "POST",
       url: `/api/v1/attendance-sessions/${SESSION_ID}/open`,
       headers: {
@@ -230,7 +327,7 @@ describe("AttendanceSession HTTP routes", () => {
   it("POST /handover menggunakan waktu server", async () => {
     const beforeRequest = new Date();
 
-    const response = await app.inject({
+    const response = await authenticatedInject({
       method: "POST",
       url: `/api/v1/attendance-sessions/${SESSION_ID}/handover`,
       headers: {
@@ -272,7 +369,7 @@ describe("AttendanceSession HTTP routes", () => {
   it("POST /finalize menggunakan waktu server", async () => {
     const beforeRequest = new Date();
 
-    const response = await app.inject({
+    const response = await authenticatedInject({
       method: "POST",
       url: `/api/v1/attendance-sessions/${SESSION_ID}/finalize`,
       headers: {
@@ -312,7 +409,7 @@ describe("AttendanceSession HTTP routes", () => {
   it("POST /cancel menggunakan waktu server", async () => {
     const beforeRequest = new Date();
 
-    const response = await app.inject({
+    const response = await authenticatedInject({
       method: "POST",
       url: `/api/v1/attendance-sessions/${SESSION_ID}/cancel`,
       headers: {
@@ -354,7 +451,7 @@ describe("AttendanceSession HTTP routes", () => {
       new Error("Schedule not found"),
     );
 
-    const response = await app.inject({
+    const response = await authenticatedInject({
       method: "POST",
       url: "/api/v1/attendance-sessions",
       headers: {
@@ -383,7 +480,7 @@ describe("AttendanceSession HTTP routes", () => {
       new Error("AttendanceSession not found"),
     );
 
-    const response = await app.inject({
+    const response = await authenticatedInject({
       method: "POST",
       url: `/api/v1/attendance-sessions/${SESSION_ID}/finalize`,
       headers: {
@@ -402,7 +499,7 @@ describe("AttendanceSession HTTP routes", () => {
   });
 
   it("route yang tidak tersedia tidak mengekspos auto-finalize", async () => {
-    const response = await app.inject({
+    const response = await authenticatedInject({
       method: "POST",
       url: `/api/v1/attendance-sessions/${SESSION_ID}/auto-finalize`,
       headers: {
@@ -418,7 +515,7 @@ describe("AttendanceSession HTTP routes", () => {
   });
 
   it("health endpoint tetap tersedia", async () => {
-    const response = await app.inject({
+    const response = await authenticatedInject({
       method: "GET",
       url: "/health",
     });

@@ -413,7 +413,7 @@ model SubjectOffering {
   schedules      Schedule[]
 
   @@unique([id, institutionId])
-  @@unique([institutionId, academicYearId, subjectId, offeringType])
+  @@unique([institutionId, academicYearId, subjectId, offeringType], map: "SubjectOffering_institutionId_academicYearId_subjectId_offering")
   @@unique([institutionId, academicYearId, subjectId, id])
   @@index([institutionId, academicYearId])
   @@index([institutionId, subjectId])
@@ -491,10 +491,10 @@ model ScheduleStudentParticipant {
   createdBy   User        @relation("ScheduleStudentParticipantActor", fields: [institutionId, createdByUserId], references: [institutionId, id], onDelete: Restrict)
 
   @@unique([id, institutionId])
-  @@unique([scheduleId, studentId, effectiveFrom])
+  @@unique([scheduleId, studentId, effectiveFrom], map: "ScheduleStudentParticipant_scheduleId_studentId_effectiveFrom_k")
   @@index([institutionId, scheduleId])
   @@index([institutionId, studentId])
-  @@index([institutionId, scheduleId, studentId])
+  @@index([institutionId, scheduleId, studentId], map: "ScheduleStudentParticipant_institutionId_scheduleId_studentId_i")
 }
 
 // ============================================================

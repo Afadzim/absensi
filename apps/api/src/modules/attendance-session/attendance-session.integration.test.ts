@@ -8,6 +8,7 @@ import {
 } from "vitest";
 
 import { buildApp } from "../../app.js";
+import type { AuthSessionService } from "../auth/auth.session.service.js";
 import { testPrisma } from "../../test/db.js";
 import {
   createAttendanceSessionFixture,
@@ -25,8 +26,8 @@ const FINALIZE_TIME =
 const CANCEL_TIME =
   new Date("2026-09-25T07:15:00.000Z");
 
-const OTHER_INSTITUTION_ID =
-  "99999999-9999-4999-8999-999999999999";
+const SESSION_TOKEN = "a".repeat(43);
+const CSRF_TOKEN = "b".repeat(43);
 
 describe(
   "AttendanceSession HTTP integration",
@@ -37,6 +38,10 @@ describe(
         typeof createAttendanceSessionFixture
       >
     >;
+    let authSessionService: {
+      validateSession: ReturnType<typeof vi.fn>;
+      verifyCsrfToken: ReturnType<typeof vi.fn>;
+    };
 
     beforeEach(async () => {
       vi.useFakeTimers({
@@ -63,7 +68,33 @@ describe(
         },
       });
 
-      app = buildApp();
+      authSessionService = {
+        validateSession: vi.fn().mockResolvedValue({
+          sessionId: "test-session",
+          userId: "test-user",
+          institutionId: fixture.institutionId,
+          teacherId: fixture.teacherId,
+          roles: ["TEST"],
+          permissions: [
+            "attendance.session.create",
+            "attendance.session.open",
+            "attendance.session.handover",
+            "attendance.session.finalize",
+            "attendance.session.cancel",
+          ],
+          createdAt: OPEN_TIME,
+          lastSeenAt: OPEN_TIME,
+          expiresAt: new Date(
+            OPEN_TIME.getTime() + 60 * 60 * 1000,
+          ),
+        }),
+        verifyCsrfToken: vi.fn().mockResolvedValue(true),
+      };
+
+      app = buildApp({
+        authSessionService:
+          authSessionService as unknown as AuthSessionService,
+      });
     });
 
     afterEach(async () => {
@@ -72,10 +103,29 @@ describe(
       vi.useRealTimers();
     });
 
+    function authenticatedInject(options: {
+      method: "POST" | "GET";
+      url: string;
+      headers?: Record<string, string>;
+      payload?: string | object | Buffer | NodeJS.ReadableStream;
+    }) {
+      return app.inject({
+        ...options,
+        cookies: {
+          "__Host-am_session": SESSION_TOKEN,
+          "__Host-am_csrf": CSRF_TOKEN,
+        },
+        headers: {
+          "x-csrf-token": CSRF_TOKEN,
+          ...options.headers,
+        },
+      });
+    }
+
     it(
       "POST create benar-benar membuat AttendanceSession di PostgreSQL",
       async () => {
-        const response = await app.inject({
+        const response = await authenticatedInject({
           method: "POST",
           url: "/api/v1/attendance-sessions",
           headers: {
@@ -151,7 +201,7 @@ describe(
       "POST open menyimpan segment OPEN ke PostgreSQL",
       async () => {
         const createResponse =
-          await app.inject({
+          await authenticatedInject({
             method: "POST",
             url: "/api/v1/attendance-sessions",
             headers: {
@@ -176,7 +226,7 @@ describe(
         vi.setSystemTime(OPEN_TIME);
 
         const openResponse =
-          await app.inject({
+          await authenticatedInject({
             method: "POST",
             url:
               `/api/v1/attendance-sessions/${sessionId}/open`,
@@ -231,7 +281,7 @@ describe(
       "POST finalize menutup session dan segment di PostgreSQL",
       async () => {
         const createResponse =
-          await app.inject({
+          await authenticatedInject({
             method: "POST",
             url: "/api/v1/attendance-sessions",
             headers: {
@@ -256,7 +306,7 @@ describe(
         vi.setSystemTime(OPEN_TIME);
 
         const openResponse =
-          await app.inject({
+          await authenticatedInject({
             method: "POST",
             url:
               `/api/v1/attendance-sessions/${sessionId}/open`,
@@ -275,7 +325,7 @@ describe(
         vi.setSystemTime(FINALIZE_TIME);
 
         const finalizeResponse =
-          await app.inject({
+          await authenticatedInject({
             method: "POST",
             url:
               `/api/v1/attendance-sessions/${sessionId}/finalize`,
@@ -347,7 +397,7 @@ describe(
       "POST cancel menutup session dan tidak menyisakan segment OPEN",
       async () => {
         const createResponse =
-          await app.inject({
+          await authenticatedInject({
             method: "POST",
             url: "/api/v1/attendance-sessions",
             headers: {
@@ -372,7 +422,7 @@ describe(
         vi.setSystemTime(OPEN_TIME);
 
         const openResponse =
-          await app.inject({
+          await authenticatedInject({
             method: "POST",
             url:
               `/api/v1/attendance-sessions/${sessionId}/open`,
@@ -391,7 +441,7 @@ describe(
         vi.setSystemTime(CANCEL_TIME);
 
         const cancelResponse =
-          await app.inject({
+          await authenticatedInject({
             method: "POST",
             url:
               `/api/v1/attendance-sessions/${sessionId}/cancel`,
@@ -451,19 +501,23 @@ describe(
     it(
       "tenant isolation tetap ditegakkan melalui endpoint",
       async () => {
+        const otherTenantFixture =
+          await createAttendanceSessionFixture();
+
+        try {
         const response =
-          await app.inject({
+          await authenticatedInject({
             method: "POST",
             url: "/api/v1/attendance-sessions",
             headers: {
               "x-institution-id":
-                OTHER_INSTITUTION_ID,
+                otherTenantFixture.institutionId,
               "content-type":
                 "application/json",
             },
             payload: {
               scheduleId:
-                fixture.scheduleId,
+                otherTenantFixture.scheduleId,
               sessionDate: SESSION_DATE,
             },
           });
@@ -481,12 +535,15 @@ describe(
             {
               where: {
                 scheduleId:
-                  fixture.scheduleId,
+                  otherTenantFixture.scheduleId,
               },
             },
           );
 
-        expect(sessions).toHaveLength(0);
+        expect(sessions).toHaveLength(1);
+        } finally {
+          await otherTenantFixture.cleanup();
+        }
       },
     );
   },

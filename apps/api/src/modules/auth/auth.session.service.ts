@@ -1,15 +1,26 @@
-﻿import {
+import { timingSafeEqual } from "node:crypto";
+
+import {
   generateCsrfToken,
   generateSessionToken,
   hashCsrfToken,
   hashSessionToken,
 } from "./auth.crypto.js";
+import { verifyPassword } from "./auth.crypto.js";
 import { AUTH_CONSTANTS } from "./auth.constants.js";
 import { prisma } from "../../lib/prisma.js";
 
 export interface AuthSessionCreateInput {
   userId: string;
   institutionId: string;
+  ipAddress?: string;
+  userAgent?: string;
+}
+
+export interface AuthCredentialsInput {
+  institutionId: string;
+  username: string;
+  password: string;
   ipAddress?: string;
   userAgent?: string;
 }
@@ -115,6 +126,38 @@ export class AuthSessionService {
       lastSeenAt: session.lastSeenAt,
       expiresAt: session.expiresAt,
     };
+  }
+
+  async authenticateCredentials(
+    input: AuthCredentialsInput,
+  ): Promise<AuthSessionResult | null> {
+    const user = await prisma.user.findFirst({
+      where: {
+        institutionId: input.institutionId,
+        username: input.username,
+      },
+      select: {
+        id: true,
+        institutionId: true,
+        passwordHash: true,
+        status: true,
+      },
+    });
+
+    if (!user || user.status !== "ACTIVE") {
+      return null;
+    }
+
+    if (!(await verifyPassword(input.password, user.passwordHash))) {
+      return null;
+    }
+
+    return this.createSession({
+      userId: user.id,
+      institutionId: user.institutionId,
+      ipAddress: input.ipAddress,
+      userAgent: input.userAgent,
+    });
   }
 
   async validateSession(
@@ -269,6 +312,37 @@ export class AuthSessionService {
     if (result.count === 0) {
       throw new Error("Active session not found.");
     }
+  }
+
+  async verifyCsrfToken(
+    sessionId: string,
+    csrfToken: string,
+  ): Promise<boolean> {
+    if (!/^[A-Za-z0-9_-]{43}$/u.test(csrfToken)) {
+      return false;
+    }
+
+    const session = await prisma.authSession.findFirst({
+      where: {
+        id: sessionId,
+        revokedAt: null,
+      },
+      select: {
+        csrfTokenHash: true,
+      },
+    });
+
+    if (!session) {
+      return false;
+    }
+
+    const actualHash = Buffer.from(hashCsrfToken(csrfToken), "hex");
+    const expectedHash = Buffer.from(session.csrfTokenHash, "hex");
+
+    return (
+      actualHash.length === expectedHash.length &&
+      timingSafeEqual(actualHash, expectedHash)
+    );
   }
 
   async rotateSession(

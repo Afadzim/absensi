@@ -744,4 +744,70 @@ describe("AuthSessionService", () => {
       ),
     ).resolves.not.toBeNull();
   });
+
+  it("4B-020: kredensial valid membuat session", async () => {
+    now = new Date("2026-09-27T10:00:00.000Z");
+
+    const row = await testPrisma.user.findUniqueOrThrow({
+      where: { id: fixture.userAId },
+      select: { username: true },
+    });
+    const session = await createService().authenticateCredentials({
+      institutionId: fixture.institutionAId,
+      username: row.username,
+      password: "Test password 123456",
+    });
+
+    expect(session).not.toBeNull();
+    expect(session).toMatchObject({
+      sessionToken: expect.any(String),
+      csrfToken: expect.any(String),
+    });
+  });
+
+  it("4B-021: kredensial salah atau tenant salah ditolak tanpa membedakan respons", async () => {
+    const user = await testPrisma.user.findUniqueOrThrow({
+      where: { id: fixture.userAId },
+      select: { username: true },
+    });
+
+    await expect(
+      createService().authenticateCredentials({
+        institutionId: fixture.institutionAId,
+        username: user.username,
+        password: "Wrong password 123456",
+      }),
+    ).resolves.toBeNull();
+
+    await expect(
+      createService().authenticateCredentials({
+        institutionId: fixture.institutionBId,
+        username: user.username,
+        password: "Test password 123456",
+      }),
+    ).resolves.toBeNull();
+  });
+
+  it("4B-022: validasi CSRF memeriksa hash token milik session", async () => {
+    await expect(
+      createService().verifyCsrfToken(
+        fixture.sessionId,
+        fixture.csrfToken,
+      ),
+    ).resolves.toBe(true);
+
+    await expect(
+      createService().verifyCsrfToken(
+        fixture.sessionId,
+        "wrong-token",
+      ),
+    ).resolves.toBe(false);
+
+    await expect(
+      createService().verifyCsrfToken(
+        fixture.sessionId,
+        "z".repeat(43),
+      ),
+    ).resolves.toBe(false);
+  });
 });

@@ -6,11 +6,9 @@ import type {
 import {
   AttendanceSessionService,
 } from "./attendance-session.service.js";
-
-type ContextHeaders = {
-  "x-institution-id"?: string;
-  "x-teacher-id"?: string;
-};
+import type { AuthSessionService } from "../auth/auth.session.service.js";
+import { AUTH_PERMISSIONS } from "../auth/auth.permissions.js";
+import { createRequirePermission } from "../auth/auth.middleware.js";
 
 type CreateSessionBody = {
   scheduleId?: unknown;
@@ -20,27 +18,6 @@ type CreateSessionBody = {
 type SessionParams = {
   sessionId: string;
 };
-
-function requireHeader(
-  request: FastifyRequest<{
-    Headers: ContextHeaders;
-  }>,
-  name: keyof ContextHeaders,
-): string {
-  const value = request.headers[name];
-
-  if (
-    typeof value !== "string" ||
-    value.trim().length === 0
-  ) {
-    throw new HttpRequestError(
-      400,
-      `Missing required header: ${name}`,
-    );
-  }
-
-  return value.trim();
-}
 
 function requireUuid(
   value: string,
@@ -146,21 +123,48 @@ function sendDomainError(
 export async function registerAttendanceSessionRoutes(
   app: FastifyInstance,
   service: AttendanceSessionService,
+  authSessionService: AuthSessionService,
 ): Promise<void> {
+  const authorizeCreate = createRequirePermission(
+    authSessionService,
+    AUTH_PERMISSIONS.attendanceSessionCreate,
+  );
+  const authorizeOpen = createRequirePermission(
+    authSessionService,
+    AUTH_PERMISSIONS.attendanceSessionOpen,
+  );
+  const authorizeHandover = createRequirePermission(
+    authSessionService,
+    AUTH_PERMISSIONS.attendanceSessionHandover,
+  );
+  const authorizeFinalize = createRequirePermission(
+    authSessionService,
+    AUTH_PERMISSIONS.attendanceSessionFinalize,
+  );
+  const authorizeCancel = createRequirePermission(
+    authSessionService,
+    AUTH_PERMISSIONS.attendanceSessionCancel,
+  );
+
   app.post<{
-    Headers: ContextHeaders;
     Body: CreateSessionBody;
   }>(
     "/api/v1/attendance-sessions",
+    {
+      preHandler: authorizeCreate,
+    },
     async (request, reply) => {
       try {
-        const institutionId = requireUuid(
-          requireHeader(
-            request,
-            "x-institution-id",
-          ),
-          "x-institution-id",
-        );
+        const auth = request.auth;
+
+        if (!auth) {
+          return reply.status(401).send({
+            error: {
+              code: "UNAUTHENTICATED",
+              message: "Authentication required.",
+            },
+          });
+        }
 
         const body = request.body ?? {};
 
@@ -178,7 +182,7 @@ export async function registerAttendanceSessionRoutes(
 
         const result =
           await service.createSession({
-            institutionId,
+            institutionId: auth.institutionId,
             scheduleId,
             sessionDate,
           });
@@ -193,27 +197,33 @@ export async function registerAttendanceSessionRoutes(
   );
 
   app.post<{
-    Headers: ContextHeaders;
     Params: SessionParams;
   }>(
     "/api/v1/attendance-sessions/:sessionId/open",
+    {
+      preHandler: authorizeOpen,
+    },
     async (request, reply) => {
       try {
-        const institutionId = requireUuid(
-          requireHeader(
-            request,
-            "x-institution-id",
-          ),
-          "x-institution-id",
-        );
+        const auth = request.auth;
 
-        const teacherId = requireUuid(
-          requireHeader(
-            request,
-            "x-teacher-id",
-          ),
-          "x-teacher-id",
-        );
+        if (!auth) {
+          return reply.status(401).send({
+            error: {
+              code: "UNAUTHENTICATED",
+              message: "Authentication required.",
+            },
+          });
+        }
+
+        if (!auth.teacherId) {
+          return reply.status(403).send({
+            error: {
+              code: "TEACHER_PROFILE_REQUIRED",
+              message: "An associated teacher profile is required.",
+            },
+          });
+        }
 
         const sessionId = requireUuid(
           request.params.sessionId,
@@ -222,9 +232,9 @@ export async function registerAttendanceSessionRoutes(
 
         const result =
           await service.openSegment({
-            institutionId,
+            institutionId: auth.institutionId,
             sessionId,
-            teacherId,
+            teacherId: auth.teacherId,
             startedAt: new Date(),
           });
 
@@ -238,27 +248,33 @@ export async function registerAttendanceSessionRoutes(
   );
 
   app.post<{
-    Headers: ContextHeaders;
     Params: SessionParams;
   }>(
     "/api/v1/attendance-sessions/:sessionId/handover",
+    {
+      preHandler: authorizeHandover,
+    },
     async (request, reply) => {
       try {
-        const institutionId = requireUuid(
-          requireHeader(
-            request,
-            "x-institution-id",
-          ),
-          "x-institution-id",
-        );
+        const auth = request.auth;
 
-        const teacherId = requireUuid(
-          requireHeader(
-            request,
-            "x-teacher-id",
-          ),
-          "x-teacher-id",
-        );
+        if (!auth) {
+          return reply.status(401).send({
+            error: {
+              code: "UNAUTHENTICATED",
+              message: "Authentication required.",
+            },
+          });
+        }
+
+        if (!auth.teacherId) {
+          return reply.status(403).send({
+            error: {
+              code: "TEACHER_PROFILE_REQUIRED",
+              message: "An associated teacher profile is required.",
+            },
+          });
+        }
 
         const sessionId = requireUuid(
           request.params.sessionId,
@@ -267,9 +283,9 @@ export async function registerAttendanceSessionRoutes(
 
         const result =
           await service.handover({
-            institutionId,
+            institutionId: auth.institutionId,
             sessionId,
-            teacherId,
+            teacherId: auth.teacherId,
             handoverAt: new Date(),
           });
 
@@ -283,19 +299,24 @@ export async function registerAttendanceSessionRoutes(
   );
 
   app.post<{
-    Headers: ContextHeaders;
     Params: SessionParams;
   }>(
     "/api/v1/attendance-sessions/:sessionId/finalize",
+    {
+      preHandler: authorizeFinalize,
+    },
     async (request, reply) => {
       try {
-        const institutionId = requireUuid(
-          requireHeader(
-            request,
-            "x-institution-id",
-          ),
-          "x-institution-id",
-        );
+        const auth = request.auth;
+
+        if (!auth) {
+          return reply.status(401).send({
+            error: {
+              code: "UNAUTHENTICATED",
+              message: "Authentication required.",
+            },
+          });
+        }
 
         const sessionId = requireUuid(
           request.params.sessionId,
@@ -304,7 +325,7 @@ export async function registerAttendanceSessionRoutes(
 
         const result =
           await service.finalize({
-            institutionId,
+            institutionId: auth.institutionId,
             sessionId,
             finalizedAt: new Date(),
           });
@@ -319,19 +340,24 @@ export async function registerAttendanceSessionRoutes(
   );
 
   app.post<{
-    Headers: ContextHeaders;
     Params: SessionParams;
   }>(
     "/api/v1/attendance-sessions/:sessionId/cancel",
+    {
+      preHandler: authorizeCancel,
+    },
     async (request, reply) => {
       try {
-        const institutionId = requireUuid(
-          requireHeader(
-            request,
-            "x-institution-id",
-          ),
-          "x-institution-id",
-        );
+        const auth = request.auth;
+
+        if (!auth) {
+          return reply.status(401).send({
+            error: {
+              code: "UNAUTHENTICATED",
+              message: "Authentication required.",
+            },
+          });
+        }
 
         const sessionId = requireUuid(
           request.params.sessionId,
@@ -340,7 +366,7 @@ export async function registerAttendanceSessionRoutes(
 
         const result =
           await service.cancel({
-            institutionId,
+            institutionId: auth.institutionId,
             sessionId,
             cancelledAt: new Date(),
           });
