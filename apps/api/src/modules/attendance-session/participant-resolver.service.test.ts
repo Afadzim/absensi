@@ -163,25 +163,17 @@ afterAll(async () => {
     );
   });
 
-  it("conflicting StudentClassEnrollment: resolver harus reject", async () => {
+  it("database rejects overlapping student enrollments", async () => {
     const fixture = await createParticipantResolverFixture();
 
-    await addConflictingEnrollment({
-      institutionId: fixture.institution.id,
-      studentId: fixture.students.a1.id,
-      classId: fixture.classes.b.id,
-      academicYearId: fixture.academicYear.id,
-    });
-
     await expect(
-      resolver.resolve({
+      addConflictingEnrollment({
         institutionId: fixture.institution.id,
-        scheduleId: fixture.schedules.elective.id,
-        sessionDate: SESSION_DATE,
+        studentId: fixture.students.a1.id,
+        classId: fixture.classes.b.id,
+        academicYearId: fixture.academicYear.id,
       }),
-    ).rejects.toThrow(
-      /multiple active class enrollments/i,
-    );
+    ).rejects.toThrow();
   });
 
   it("conflicting active override: resolver harus reject", async () => {
@@ -255,5 +247,4 @@ afterAll(async () => {
 
 
 });
-
 

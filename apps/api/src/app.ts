@@ -5,10 +5,16 @@ import { AttendanceSessionService } from "./modules/attendance-session/attendanc
 import { registerAttendanceSessionRoutes } from "./modules/attendance-session/attendance-session.routes.js";
 import { AuthSessionService } from "./modules/auth/auth.session.service.js";
 import { registerAuthRoutes } from "./modules/auth/auth.routes.js";
+import { MasterDataService } from "./modules/master-data/master-data.service.js";
+import { registerMasterDataRoutes } from "./modules/master-data/master-data.routes.js";
+import { ScheduleService } from "./modules/schedule/schedule.service.js";
+import { registerScheduleRoutes } from "./modules/schedule/schedule.routes.js";
 
 export interface BuildAppOptions {
   attendanceSessionService?: AttendanceSessionService;
   authSessionService?: AuthSessionService;
+  masterDataService?: MasterDataService;
+  scheduleService?: ScheduleService;
 }
 
 function getAllowedOrigins(): ReadonlySet<string> {
@@ -63,6 +69,12 @@ export function buildApp(
   const authSessionService =
     options.authSessionService ??
     new AuthSessionService();
+  const masterDataService =
+    options.masterDataService ??
+    new MasterDataService();
+  const scheduleService =
+    options.scheduleService ??
+    new ScheduleService();
 
   app.get("/health", async () => {
     return {
@@ -80,6 +92,16 @@ export function buildApp(
     attendanceSessionService,
     authSessionService,
   );
+
+  void registerMasterDataRoutes(app, {
+    service: masterDataService,
+    authSessionService,
+  });
+
+  void registerScheduleRoutes(app, {
+    service: scheduleService,
+    authSessionService,
+  });
 
   return app;
 }

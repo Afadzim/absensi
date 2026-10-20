@@ -1,4 +1,5 @@
 import { prisma } from "../../lib/prisma.js";
+import { getIsoWeekday } from "../schedule/schedule.validation.js";
 
 type PrismaTransaction = Parameters<
   Parameters<typeof prisma.$transaction>[0]
@@ -215,7 +216,7 @@ export class AttendanceSessionService {
       }
 
       const scheduleDay = schedule.dayOfWeek;
-      const sessionDay = sessionDate.getUTCDay();
+      const sessionDay = getIsoWeekday(sessionDate);
 
       if (scheduleDay !== sessionDay) {
         throw new Error("Session date does not match schedule day");
@@ -761,6 +762,4 @@ export class AttendanceSessionService {
     return session;
   }
 }
-
-
 

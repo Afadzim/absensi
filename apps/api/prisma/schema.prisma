@@ -357,6 +357,9 @@ model StudentClassEnrollment {
   @@index([institutionId, academicYearId])
 }
 
+// Migration 20261020120000_phase3_master_data adds a PostgreSQL GiST
+// exclusion constraint for non-overlapping inclusive enrollment date ranges.
+
 model Subject {
   id            String   @id @default(uuid()) @db.Uuid
   institutionId String   @db.Uuid
